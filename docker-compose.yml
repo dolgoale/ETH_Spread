@@ -23,10 +23,11 @@ services:
       - ./requirements.txt:/app/requirements.txt:ro
       # Логи (доступны на хосте)
       - ./logs:/app/logs
-      # Динамическая конфигурация (для сохранения изменений из веб-интерфейса)
-      - ./config.json:/app/config.json
-      # Файл логов
-      - ./eth_spread_monitor.log:/app/eth_spread_monitor.log
+      # Динамическая конфигурация создается внутри контейнера
+      # Монтирование отключено из-за проблем с путями
+      # - ./config.json:/app/config.json
+      # Файл логов создается внутри контейнера
+      # - ./eth_spread_monitor.log:/app/eth_spread_monitor.log
     
     # Переопределение команды запуска
     command: python main.py
