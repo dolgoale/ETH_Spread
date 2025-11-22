@@ -165,13 +165,22 @@ async def callback(request: Request, code: Optional[str] = None, state: Optional
     
     # Логируем полученную информацию для отладки
     logger.info(f"Авторизация пользователя: yandex_id={yandex_id}, login={login}, email={email}, name={name}, domain={domain}")
-    logger.info(f"Доступные пользователи для {domain}: {db.get_domain_users(domain)}")
+    try:
+        domain_users = db.get_domain_users(domain)
+        logger.info(f"Доступные пользователи для {domain}: {domain_users}")
+    except Exception as e:
+        logger.error(f"Ошибка получения пользователей домена {domain}: {e}")
+        domain_users = []
     
     # Проверяем доступ пользователя к домену (по ID или по login)
     # Используем login если он указан в базе, иначе yandex_id
     user_identifier = login if login else yandex_id
-    is_allowed = db.is_user_allowed(domain, yandex_id) or db.is_user_allowed(domain, login)
-    logger.info(f"Проверка доступа: yandex_id={yandex_id}, login={login}, is_allowed={is_allowed}")
+    try:
+        is_allowed = db.is_user_allowed(domain, yandex_id) or db.is_user_allowed(domain, login)
+        logger.info(f"Проверка доступа: yandex_id={yandex_id}, login={login}, is_allowed={is_allowed}")
+    except Exception as e:
+        logger.error(f"Ошибка проверки доступа для домена {domain}: {e}")
+        is_allowed = False
     
     if not is_allowed:
         logger.warning(f"Доступ запрещен: yandex_id={yandex_id}, login={login} не найден в списке пользователей домена {domain}")
@@ -182,17 +191,27 @@ async def callback(request: Request, code: Optional[str] = None, state: Optional
     
     logger.info(f"Доступ разрешен, создаем сессию для yandex_id={yandex_id}, login={login}")
     
-    # Сохраняем и yandex_id и login в сессию для проверки доступа
-    # В сессию сохраняем yandex_id, но также проверяем доступ по login
-    session_token = session_manager.create_session(yandex_id, email, name, domain, login=login)
-    logger.info(f"Сессия создана, токен: {session_token[:50]}...")
+    try:
+        # Сохраняем и yandex_id и login в сессию для проверки доступа
+        # В сессию сохраняем yandex_id, но также проверяем доступ по login
+        session_token = session_manager.create_session(yandex_id, email, name, domain, login=login)
+        logger.info(f"Сессия создана, токен: {session_token[:50]}...")
+    except Exception as e:
+        logger.error(f"Ошибка создания сессии: {e}")
+        error_url = f"https://{domain}/auth/login?error=session_error"
+        return RedirectResponse(url=error_url, status_code=302)
     
     # Перенаправляем на исходный домен с установкой cookie
     redirect_url = f"https://{domain}/"
-    response = RedirectResponse(url=redirect_url, status_code=302)
-    
-    # Устанавливаем cookie
-    logger.info(f"Устанавливаем cookie {settings.session_cookie_name} для домена {domain}, redirect_url={redirect_url}")
+    try:
+        response = RedirectResponse(url=redirect_url, status_code=302)
+        
+        # Устанавливаем cookie
+        logger.info(f"Устанавливаем cookie {settings.session_cookie_name} для домена {domain}, redirect_url={redirect_url}")
+    except Exception as e:
+        logger.error(f"Ошибка создания RedirectResponse: {e}")
+        error_url = f"https://{domain}/auth/login?error=redirect_error"
+        return RedirectResponse(url=error_url, status_code=302)
     logger.debug(f"Параметры cookie: httponly={settings.session_cookie_httponly}, secure={settings.session_cookie_secure}, samesite={settings.session_cookie_samesite}")
     
     # Для поддоменов нужно установить domain, иначе cookie не будет работать
