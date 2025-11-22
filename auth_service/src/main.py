@@ -64,14 +64,16 @@ async def check_auth(request: Request) -> Optional[dict]:
         return None
     
     # Проверяем доступ пользователя к домену
-    # yandex_id в сессии может быть как числовым ID, так и login
-    user_identifier = session_data.get("yandex_id", "")
-    if not user_identifier:
-        logger.debug(f"yandex_id не найден в сессии")
+    # Проверяем и по yandex_id и по login
+    yandex_id = session_data.get("yandex_id", "")
+    login = session_data.get("login", "")
+    
+    if not yandex_id and not login:
+        logger.debug(f"yandex_id и login не найдены в сессии")
         return None
     
     # Проверяем доступ (поддерживаем и ID и login)
-    is_allowed = db.is_user_allowed(domain, user_identifier)
+    is_allowed = db.is_user_allowed(domain, yandex_id) or (login and db.is_user_allowed(domain, login))
     if not is_allowed:
         logger.debug(f"Пользователь {user_identifier} не имеет доступа к домену {domain}")
         logger.debug(f"Доступные пользователи для {domain}: {db.get_domain_users(domain)}")
@@ -162,11 +164,9 @@ async def callback(request: Request, code: Optional[str] = None, state: Optional
             status_code=403
         )
     
-    # Используем login для сессии если он есть, иначе yandex_id
-    session_yandex_id = login if login else yandex_id
-    
-    # Создаем сессию (используем login если есть, иначе yandex_id)
-    session_token = session_manager.create_session(session_yandex_id, email, name, domain)
+    # Сохраняем и yandex_id и login в сессию для проверки доступа
+    # В сессию сохраняем yandex_id, но также проверяем доступ по login
+    session_token = session_manager.create_session(yandex_id, email, name, domain, login=login)
     
     # Перенаправляем на исходный домен с установкой cookie
     redirect_url = f"https://{domain}/"
