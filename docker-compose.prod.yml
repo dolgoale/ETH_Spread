@@ -1,0 +1,52 @@
+services:
+  eth-spread:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: eth-spread:latest
+    container_name: eth-spread-prod
+    restart: unless-stopped
+    
+    # Проброс портов
+    ports:
+      - "8000:8000"
+    
+    # Переменные окружения из .env файла
+    env_file:
+      - .env
+    
+    # Тома только для данных (не для кода)
+    volumes:
+      # Логи (доступны на хосте)
+      - ./logs:/app/logs
+      # Динамическая конфигурация (для сохранения изменений из веб-интерфейса)
+      - ./config.json:/app/config.json
+      # Файл логов
+      - ./eth_spread_monitor.log:/app/eth_spread_monitor.log
+    
+    # Переопределение команды запуска
+    command: python main.py
+    
+    # Логирование
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Здоровье контейнера
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/config || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # Сетевая конфигурация
+    networks:
+      - eth-spread-network
+
+networks:
+  eth-spread-network:
+    driver: bridge
+
