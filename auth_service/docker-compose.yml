@@ -1,0 +1,36 @@
+services:
+  auth-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: auth-service
+    restart: unless-stopped
+    
+    # Проброс портов
+    ports:
+      - "9000:9000"
+    
+    # Переменные окружения из .env файла
+    env_file:
+      - .env
+    
+    # Монтирование томов
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    
+    # Логирование
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Сетевая конфигурация
+    networks:
+      - auth-network
+
+networks:
+  auth-network:
+    driver: bridge
+

@@ -1,0 +1,309 @@
+"""
+Основной файл сервиса авторизации
+"""
+import logging
+from fastapi import FastAPI, Request, Response, HTTPException, Depends, Cookie
+from fastapi.responses import RedirectResponse, JSONResponse, HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
+from typing import Optional
+import urllib.parse
+
+from .config import settings
+from .yandex_oauth import yandex_oauth
+from .session_manager import session_manager
+from .database import db
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="Auth Service", version="1.0.0")
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # В продакшене указать конкретные домены
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def get_domain_from_request(request: Request) -> str:
+    """Получить домен из запроса"""
+    host = request.headers.get("host", "")
+    # Убираем порт если есть
+    domain = host.split(":")[0]
+    return domain.lower()
+
+
+def get_session_from_cookie(request: Request) -> Optional[dict]:
+    """Получить сессию из cookie"""
+    session_token = request.cookies.get(settings.session_cookie_name)
+    if not session_token:
+        return None
+    
+    return session_manager.verify_session(session_token)
+
+
+async def check_auth(request: Request) -> Optional[dict]:
+    """Проверить авторизацию пользователя"""
+    domain = get_domain_from_request(request)
+    session_data = get_session_from_cookie(request)
+    
+    if not session_data:
+        return None
+    
+    # Проверяем, что сессия для правильного домена
+    if session_data.get("domain") != domain:
+        logger.debug(f"Сессия для другого домена: {session_data.get('domain')} != {domain}")
+        return None
+    
+    # Проверяем доступ пользователя к домену
+    yandex_id = session_data.get("yandex_id")
+    if not db.is_user_allowed(domain, yandex_id):
+        logger.debug(f"Пользователь {yandex_id} не имеет доступа к домену {domain}")
+        return None
+    
+    return session_data
+
+
+@app.get("/auth/login")
+async def login(request: Request):
+    """Начало процесса авторизации"""
+    domain = get_domain_from_request(request)
+    
+    # Кодируем домен в state для возврата после авторизации
+    state = urllib.parse.quote(domain)
+    
+    authorize_url = yandex_oauth.get_authorize_url(state=state)
+    return RedirectResponse(url=authorize_url)
+
+
+@app.get("/auth/callback")
+async def callback(request: Request, code: Optional[str] = None, state: Optional[str] = None):
+    """Обработка callback от Yandex OAuth"""
+    if not code:
+        return HTMLResponse("<h1>Ошибка авторизации: отсутствует код</h1>", status_code=400)
+    
+    # Получаем домен из state
+    domain = urllib.parse.unquote(state) if state else get_domain_from_request(request)
+    
+    # Получаем токен
+    token_data = await yandex_oauth.get_token(code)
+    if not token_data:
+        return HTMLResponse("<h1>Ошибка авторизации: не удалось получить токен</h1>", status_code=400)
+    
+    access_token = token_data.get("access_token")
+    if not access_token:
+        return HTMLResponse("<h1>Ошибка авторизации: токен не найден</h1>", status_code=400)
+    
+    # Получаем информацию о пользователе
+    user_info = await yandex_oauth.get_user_info(access_token)
+    if not user_info:
+        return HTMLResponse("<h1>Ошибка авторизации: не удалось получить информацию о пользователе</h1>", status_code=400)
+    
+    yandex_id = user_info.get("yandex_id", "")
+    email = user_info.get("default_email", "")
+    name = user_info.get("real_name") or user_info.get("display_name", "")
+    
+    # Проверяем доступ пользователя к домену
+    if not db.is_user_allowed(domain, yandex_id):
+        return HTMLResponse(
+            f"<h1>Доступ запрещен</h1><p>У вас нет доступа к домену {domain}</p>",
+            status_code=403
+        )
+    
+    # Создаем сессию
+    session_token = session_manager.create_session(yandex_id, email, name, domain)
+    
+    # Перенаправляем на исходный домен с установкой cookie
+    redirect_url = f"https://{domain}/"
+    response = RedirectResponse(url=redirect_url)
+    
+    # Устанавливаем cookie
+    response.set_cookie(
+        key=settings.session_cookie_name,
+        value=session_token,
+        httponly=settings.session_cookie_httponly,
+        secure=settings.session_cookie_secure,
+        samesite=settings.session_cookie_samesite,
+        max_age=settings.session_expire_hours * 3600,
+        path="/"
+    )
+    
+    return response
+
+
+@app.get("/auth/logout")
+async def logout(request: Request):
+    """Выход из системы"""
+    domain = get_domain_from_request(request)
+    redirect_url = f"https://{domain}/"
+    
+    response = RedirectResponse(url=redirect_url)
+    response.delete_cookie(
+        key=settings.session_cookie_name,
+        path="/"
+    )
+    return response
+
+
+@app.get("/auth/check")
+async def check(request: Request):
+    """Проверить статус авторизации"""
+    session_data = await check_auth(request)
+    
+    if session_data:
+        return JSONResponse({
+            "authenticated": True,
+            "user": {
+                "yandex_id": session_data.get("yandex_id"),
+                "email": session_data.get("email"),
+                "name": session_data.get("name")
+            }
+        })
+    else:
+        return JSONResponse({
+            "authenticated": False
+        })
+
+
+@app.get("/auth/user")
+async def get_user(request: Request):
+    """Получить информацию о текущем пользователе"""
+    session_data = await check_auth(request)
+    
+    if not session_data:
+        raise HTTPException(status_code=401, detail="Не авторизован")
+    
+    return JSONResponse({
+        "yandex_id": session_data.get("yandex_id"),
+        "email": session_data.get("email"),
+        "name": session_data.get("name"),
+        "domain": session_data.get("domain")
+    })
+
+
+# API для управления пользователями (только для администратора)
+@app.get("/api/admin/domains")
+async def get_domains(request: Request):
+    """Получить список всех доменов"""
+    session_data = await check_auth(request)
+    if not session_data:
+        raise HTTPException(status_code=401, detail="Не авторизован")
+    
+    # Проверка на администратора
+    if session_data.get("yandex_id") != settings.admin_yandex_id:
+        raise HTTPException(status_code=403, detail="Доступ запрещен")
+    
+    domains = db.get_all_domains()
+    return JSONResponse(domains)
+
+
+@app.get("/api/admin/domains/{domain}/users")
+async def get_domain_users(domain: str, request: Request):
+    """Получить список пользователей домена"""
+    session_data = await check_auth(request)
+    if not session_data:
+        raise HTTPException(status_code=401, detail="Не авторизован")
+    
+    if session_data.get("yandex_id") != settings.admin_yandex_id:
+        raise HTTPException(status_code=403, detail="Доступ запрещен")
+    
+    users = db.get_domain_users(domain)
+    return JSONResponse({"domain": domain, "users": users})
+
+
+@app.post("/api/admin/domains/{domain}/users/{yandex_id}")
+async def add_user_to_domain(domain: str, yandex_id: str, request: Request):
+    """Добавить пользователя к домену"""
+    session_data = await check_auth(request)
+    if not session_data:
+        raise HTTPException(status_code=401, detail="Не авторизован")
+    
+    if session_data.get("yandex_id") != settings.admin_yandex_id:
+        raise HTTPException(status_code=403, detail="Доступ запрещен")
+    
+    success = db.add_user_to_domain(domain, yandex_id)
+    if success:
+        return JSONResponse({"success": True, "message": f"Пользователь {yandex_id} добавлен к домену {domain}"})
+    else:
+        return JSONResponse({"success": False, "message": "Пользователь уже существует или ошибка"}), 400
+
+
+@app.delete("/api/admin/domains/{domain}/users/{yandex_id}")
+async def remove_user_from_domain(domain: str, yandex_id: str, request: Request):
+    """Удалить пользователя из домена"""
+    session_data = await check_auth(request)
+    if not session_data:
+        raise HTTPException(status_code=401, detail="Не авторизован")
+    
+    if session_data.get("yandex_id") != settings.admin_yandex_id:
+        raise HTTPException(status_code=403, detail="Доступ запрещен")
+    
+    success = db.remove_user_from_domain(domain, yandex_id)
+    if success:
+        return JSONResponse({"success": True, "message": f"Пользователь {yandex_id} удален из домена {domain}"})
+    else:
+        return JSONResponse({"success": False, "message": "Пользователь не найден"}), 404
+
+
+@app.post("/api/admin/domains/{domain}")
+async def add_domain(domain: str, request: Request):
+    """Добавить новый домен"""
+    session_data = await check_auth(request)
+    if not session_data:
+        raise HTTPException(status_code=401, detail="Не авторизован")
+    
+    if session_data.get("yandex_id") != settings.admin_yandex_id:
+        raise HTTPException(status_code=403, detail="Доступ запрещен")
+    
+    success = db.add_domain(domain)
+    if success:
+        return JSONResponse({"success": True, "message": f"Домен {domain} добавлен"})
+    else:
+        return JSONResponse({"success": False, "message": "Домен уже существует"}), 400
+
+
+@app.get("/admin")
+async def admin_panel(request: Request):
+    """Админ-панель для управления пользователями"""
+    session_data = await check_auth(request)
+    if not session_data:
+        return RedirectResponse(url="/auth/login")
+    
+    if session_data.get("yandex_id") != settings.admin_yandex_id:
+        raise HTTPException(status_code=403, detail="Доступ запрещен")
+    
+    # Читаем HTML шаблон
+    from pathlib import Path
+    template_path = Path(__file__).parent / "templates" / "admin.html"
+    
+    if template_path.exists():
+        with open(template_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content)
+    else:
+        return HTMLResponse(
+            "<h1>Админ-панель</h1><p>Используйте API для управления пользователями</p>",
+            status_code=200
+        )
+
+
+@app.get("/health")
+async def health():
+    """Проверка здоровья сервиса"""
+    return JSONResponse({"status": "ok"})
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        app,
+        host=settings.auth_server_host,
+        port=settings.auth_server_port
+    )
+

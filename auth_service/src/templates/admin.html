@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Управление пользователями - Auth Service</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 30px;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+        }
+        
+        .domain-section {
+            margin-bottom: 40px;
+            padding: 20px;
+            background: #f9f9f9;
+            border-radius: 6px;
+        }
+        
+        .domain-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .domain-title {
+            font-size: 1.5em;
+            color: #333;
+        }
+        
+        .users-list {
+            list-style: none;
+            margin: 15px 0;
+        }
+        
+        .user-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 15px;
+            background: white;
+            border-radius: 4px;
+            margin-bottom: 8px;
+        }
+        
+        .user-info {
+            flex: 1;
+        }
+        
+        .user-id {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #c82333;
+        }
+        
+        .btn-primary {
+            background: #007bff;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #0056b3;
+        }
+        
+        .add-user-form {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        
+        .add-user-form input {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        
+        .message {
+            padding: 12px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        
+        .message-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        
+        .message-error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Управление пользователями</h1>
+        
+        <div id="message"></div>
+        <div id="domains-container" class="loading">Загрузка...</div>
+    </div>
+    
+    <script>
+        const API_BASE = '/api/admin';
+        
+        function showMessage(text, type = 'success') {
+            const messageDiv = document.getElementById('message');
+            messageDiv.className = `message message-${type}`;
+            messageDiv.textContent = text;
+            messageDiv.style.display = 'block';
+            
+            setTimeout(() => {
+                messageDiv.style.display = 'none';
+            }, 5000);
+        }
+        
+        async function loadDomains() {
+            try {
+                const response = await fetch(`${API_BASE}/domains`);
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        window.location.href = '/auth/login';
+                        return;
+                    }
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                const domains = await response.json();
+                renderDomains(domains);
+            } catch (error) {
+                document.getElementById('domains-container').innerHTML = 
+                    `<div class="message message-error">Ошибка загрузки: ${error.message}</div>`;
+            }
+        }
+        
+        function renderDomains(domains) {
+            const container = document.getElementById('domains-container');
+            container.className = '';
+            container.innerHTML = '';
+            
+            for (const [domain, data] of Object.entries(domains)) {
+                const section = document.createElement('div');
+                section.className = 'domain-section';
+                
+                section.innerHTML = `
+                    <div class="domain-header">
+                        <div>
+                            <div class="domain-title">${domain}</div>
+                            <div style="color: #666; font-size: 0.9em; margin-top: 5px;">${data.description || ''}</div>
+                        </div>
+                    </div>
+                    <ul class="users-list" id="users-${domain}">
+                        ${data.users.map(userId => `
+                            <li class="user-item">
+                                <div class="user-info">
+                                    <span class="user-id">${userId}</span>
+                                </div>
+                                <button class="btn btn-danger" onclick="removeUser('${domain}', '${userId}')">
+                                    Удалить
+                                </button>
+                            </li>
+                        `).join('')}
+                    </ul>
+                    <div class="add-user-form">
+                        <input type="text" id="new-user-${domain}" placeholder="Yandex ID пользователя">
+                        <button class="btn btn-primary" onclick="addUser('${domain}')">
+                            Добавить пользователя
+                        </button>
+                    </div>
+                `;
+                
+                container.appendChild(section);
+            }
+        }
+        
+        async function addUser(domain) {
+            const input = document.getElementById(`new-user-${domain}`);
+            const yandexId = input.value.trim();
+            
+            if (!yandexId) {
+                showMessage('Введите Yandex ID', 'error');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/domains/${encodeURIComponent(domain)}/users/${encodeURIComponent(yandexId)}`, {
+                    method: 'POST'
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    showMessage(result.message || 'Пользователь добавлен', 'success');
+                    input.value = '';
+                    loadDomains();
+                } else {
+                    showMessage(result.message || 'Ошибка добавления пользователя', 'error');
+                }
+            } catch (error) {
+                showMessage(`Ошибка: ${error.message}`, 'error');
+            }
+        }
+        
+        async function removeUser(domain, yandexId) {
+            if (!confirm(`Удалить пользователя ${yandexId} из домена ${domain}?`)) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/domains/${encodeURIComponent(domain)}/users/${encodeURIComponent(yandexId)}`, {
+                    method: 'DELETE'
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok) {
+                    showMessage(result.message || 'Пользователь удален', 'success');
+                    loadDomains();
+                } else {
+                    showMessage(result.message || 'Ошибка удаления пользователя', 'error');
+                }
+            } catch (error) {
+                showMessage(`Ошибка: ${error.message}`, 'error');
+            }
+        }
+        
+        // Загрузка при старте
+        loadDomains();
+    </script>
+</body>
+</html>
+
