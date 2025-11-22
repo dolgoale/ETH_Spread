@@ -171,6 +171,7 @@ async def callback(request: Request, code: Optional[str] = None, state: Optional
     # Используем login если он указан в базе, иначе yandex_id
     user_identifier = login if login else yandex_id
     is_allowed = db.is_user_allowed(domain, yandex_id) or db.is_user_allowed(domain, login)
+    logger.info(f"Проверка доступа: yandex_id={yandex_id}, login={login}, is_allowed={is_allowed}")
     
     if not is_allowed:
         logger.warning(f"Доступ запрещен: yandex_id={yandex_id}, login={login} не найден в списке пользователей домена {domain}")
@@ -179,13 +180,16 @@ async def callback(request: Request, code: Optional[str] = None, state: Optional
             status_code=403
         )
     
+    logger.info(f"Доступ разрешен, создаем сессию для yandex_id={yandex_id}, login={login}")
+    
     # Сохраняем и yandex_id и login в сессию для проверки доступа
     # В сессию сохраняем yandex_id, но также проверяем доступ по login
     session_token = session_manager.create_session(yandex_id, email, name, domain, login=login)
+    logger.info(f"Сессия создана, токен: {session_token[:50]}...")
     
     # Перенаправляем на исходный домен с установкой cookie
     redirect_url = f"https://{domain}/"
-    response = RedirectResponse(url=redirect_url)
+    response = RedirectResponse(url=redirect_url, status_code=302)
     
     # Устанавливаем cookie
     logger.info(f"Устанавливаем cookie {settings.session_cookie_name} для домена {domain}, redirect_url={redirect_url}")
