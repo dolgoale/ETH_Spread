@@ -14,10 +14,13 @@ from .session_manager import session_manager
 from .database import db
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+# Устанавливаем уровень для uvicorn, чтобы не было слишком много логов
+logging.getLogger("uvicorn").setLevel(logging.INFO)
+logging.getLogger("httpx").setLevel(logging.INFO)
 
 app = FastAPI(title="Auth Service", version="1.0.0")
 
@@ -184,6 +187,18 @@ async def callback(request: Request, code: Optional[str] = None, state: Optional
     
     # Устанавливаем cookie
     logger.info(f"Устанавливаем cookie {settings.session_cookie_name} для домена {domain}, redirect_url={redirect_url}")
+    logger.debug(f"Параметры cookie: httponly={settings.session_cookie_httponly}, secure={settings.session_cookie_secure}, samesite={settings.session_cookie_samesite}")
+    
+    # Для поддоменов нужно установить domain, иначе cookie не будет работать
+    # Устанавливаем domain как корневой домен без поддомена
+    cookie_domain = None
+    if domain and '.' in domain:
+        # Извлекаем корневой домен (например, из bbspreads.aadolgov.com получаем .aadolgov.com)
+        parts = domain.split('.')
+        if len(parts) >= 2:
+            cookie_domain = f".{'.'.join(parts[-2:])}"  # .aadolgov.com
+            logger.debug(f"Устанавливаем cookie domain: {cookie_domain}")
+    
     response.set_cookie(
         key=settings.session_cookie_name,
         value=session_token,
@@ -192,10 +207,11 @@ async def callback(request: Request, code: Optional[str] = None, state: Optional
         samesite=settings.session_cookie_samesite,
         max_age=settings.session_expire_hours * 3600,
         path="/",
-        domain=None  # Не указываем domain, чтобы cookie работал для всех поддоменов
+        domain=cookie_domain  # Устанавливаем domain для работы на всех поддоменах
     )
     
-    logger.info(f"Cookie установлен, перенаправляем на {redirect_url}")
+    logger.info(f"Cookie установлен (domain={cookie_domain}), перенаправляем на {redirect_url}")
+    logger.debug(f"Заголовки ответа: {dict(response.headers)}")
     return response
 
 
