@@ -94,19 +94,17 @@ class WebServer:
                 
                 # Обновляем параметры монитора напрямую для немедленного применения
                 current_config = config.get_updatable_config()
+                if "return_on_capital_threshold" in config_data:
+                    # Порог доходности обновляется через конфигурацию, не требует прямого обновления монитора
+                    pass
+                if "capital_usdt" in config_data:
+                    # Капитал обновляется через конфигурацию, не требует прямого обновления монитора
+                    pass
+                if "leverage" in config_data:
+                    # Плечо обновляется через конфигурацию, не требует прямого обновления монитора
+                    pass
                 if "perpetual_symbol" in config_data:
                     self.monitor.perpetual_symbol = config_data["perpetual_symbol"]
-                if "futures_symbols" in config_data or "futures_symbols_list" in config_data:
-                    if "futures_symbols_list" in config_data:
-                        futures_list = config_data["futures_symbols_list"]
-                        if isinstance(futures_list, list):
-                            self.monitor.futures_symbols = futures_list
-                        else:
-                            self.monitor.futures_symbols = [s.strip() for s in str(futures_list).split(",") if s.strip()]
-                    elif "futures_symbols" in config_data:
-                        self.monitor.futures_symbols = [
-                            s.strip() for s in config_data["futures_symbols"].split(",") if s.strip()
-                        ]
                 if "spread_threshold_percent" in config_data:
                     self.monitor.spread_threshold_percent = float(config_data["spread_threshold_percent"])
                 if "funding_rate_history_days" in config_data:
@@ -314,25 +312,35 @@ class WebServer:
         )
         current_funding_rate = current_funding_rate_data.get("funding_rate", 0) if current_funding_rate_data else 0
         
-        # Получаем средний FR за 3 месяца (90 дней)
-        average_fr_3months = await loop.run_in_executor(
+        # Получаем суммарный FR за 3 месяца (90 дней)
+        total_fr_3months = await loop.run_in_executor(
             executor,
-            bybit_client.calculate_average_funding_rate,
+            bybit_client.calculate_total_funding_rate,
             perpetual_symbol,
             90  # 90 дней (3 месяца)
         )
-        if average_fr_3months is None:
-            average_fr_3months = current_funding_rate if current_funding_rate else 0
+        if total_fr_3months is None:
+            total_fr_3months = 0
         
-        # Получаем средний FR за 6 месяцев (180 дней)
-        average_fr_6months = await loop.run_in_executor(
+        # Получаем суммарный FR за 6 месяцев (180 дней)
+        total_fr_6months = await loop.run_in_executor(
             executor,
-            bybit_client.calculate_average_funding_rate,
+            bybit_client.calculate_total_funding_rate,
             perpetual_symbol,
             180  # 180 дней (6 месяцев)
         )
-        if average_fr_6months is None:
-            average_fr_6months = current_funding_rate if current_funding_rate else 0
+        if total_fr_6months is None:
+            total_fr_6months = 0
+        
+        # Получаем суммарный FR за 365 дней
+        total_fr_365days = await loop.run_in_executor(
+            executor,
+            bybit_client.calculate_total_funding_rate,
+            perpetual_symbol,
+            365  # 365 дней (год)
+        )
+        if total_fr_365days is None:
+            total_fr_365days = 0
         
         # Получаем усредненный Funding Rate за последний месяц (30 дней) для расчетов срочных фьючерсов
         average_funding_rate = await loop.run_in_executor(
@@ -532,9 +540,10 @@ class WebServer:
                 "last_price": perpetual_ticker.get("last_price", 0),
                 "timestamp": perpetual_ticker.get("timestamp", 0),
                 "spot_price": spot_price,  # Spot цена ETH
-                "current_funding_rate": current_funding_rate * 100 if current_funding_rate else 0,  # Текущий FR в моменте (в процентах за 8-часовой период)
-                "average_funding_rate_3months": average_fr_3months * 100 if average_fr_3months else 0,  # Средний FR за 3 месяца (в процентах за 8-часовой период)
-                "average_funding_rate_6months": average_fr_6months * 100 if average_fr_6months else 0  # Средний FR за 6 месяцев (в процентах за 8-часовой период)
+                "current_funding_rate": current_funding_rate * 100 if current_funding_rate else 0,  # Текущий FR за последние 8 часов (в процентах)
+                "total_funding_rate_3months": total_fr_3months * 100 if total_fr_3months else 0,  # Суммарный FR за 3 месяца (в процентах)
+                "total_funding_rate_6months": total_fr_6months * 100 if total_fr_6months else 0,  # Суммарный FR за 6 месяцев (в процентах)
+                "total_funding_rate_365days": total_fr_365days * 100 if total_fr_365days else 0  # Суммарный FR за 365 дней (в процентах)
             }
         
         return {
@@ -1026,13 +1035,7 @@ def get_html_template() -> str:
                     <div class="form-group">
                         <label for="perpetual_symbol">Символ бессрочного фьючерса</label>
                         <input type="text" id="perpetual_symbol" name="perpetual_symbol" required>
-                        <small>Символ бессрочного фьючерса (например, ETHUSDT).</small>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="futures_symbols">Символы срочных фьючерсов</label>
-                        <textarea id="futures_symbols" name="futures_symbols" rows="3" required></textarea>
-                        <small>Список символов срочных фьючерсов через запятую (например: ETHUSDT_240329,ETHUSDT_240628,ETHUSDT_240927).</small>
+                        <small>Символ бессрочного фьючерса (например, ETHUSDT). Символы срочных фьючерсов получаются автоматически.</small>
                     </div>
                     
                     <div class="form-actions">
@@ -1100,9 +1103,9 @@ def get_html_template() -> str:
             if (data.funding_rate) {
                 const fr = data.funding_rate;
                 document.getElementById('current-fr').textContent = 
-                    (fr.current_rate * 100).toFixed(2) + '%';
+                    (fr.current_rate * 100).toFixed(3) + '%';
                 document.getElementById('avg-fr').textContent = 
-                    (fr.average_rate * 100).toFixed(2) + '%';
+                    (fr.average_rate * 100).toFixed(3) + '%';
             }
             
             // Обновляем спреды
@@ -1114,7 +1117,7 @@ def get_html_template() -> str:
                     const spreadItem = document.createElement('div');
                     spreadItem.className = 'spread-item';
                     
-                    const spreadPercent = spread.spread_percent.toFixed(2);
+                    const spreadPercent = spread.spread_percent.toFixed(3);
                     const isNegative = spread.spread_percent < 0;
                     
                     spreadItem.innerHTML = `
@@ -1190,13 +1193,6 @@ def get_html_template() -> str:
                     document.getElementById('funding_rate_history_days').value = data.funding_rate_history_days || '';
                     document.getElementById('monitoring_interval_seconds').value = data.monitoring_interval_seconds || '';
                     document.getElementById('perpetual_symbol').value = data.perpetual_symbol || '';
-                    
-                    // Если есть список, преобразуем в строку
-                    if (data.futures_symbols_list && Array.isArray(data.futures_symbols_list)) {
-                        document.getElementById('futures_symbols').value = data.futures_symbols_list.join(',');
-                    } else {
-                        document.getElementById('futures_symbols').value = data.futures_symbols || '';
-                    }
                 })
                 .catch(error => {
                     console.error('Ошибка загрузки конфигурации:', error);
@@ -1212,8 +1208,7 @@ def get_html_template() -> str:
                 spread_threshold_percent: parseFloat(document.getElementById('spread_threshold_percent').value),
                 funding_rate_history_days: parseInt(document.getElementById('funding_rate_history_days').value),
                 monitoring_interval_seconds: parseInt(document.getElementById('monitoring_interval_seconds').value),
-                perpetual_symbol: document.getElementById('perpetual_symbol').value.trim(),
-                futures_symbols: document.getElementById('futures_symbols').value.trim()
+                perpetual_symbol: document.getElementById('perpetual_symbol').value.trim()
             };
             
             try {
@@ -1506,6 +1501,37 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
             background: #f9fafb;
         }
         
+        .instruments-table tr.highlighted-row {
+            font-weight: bold !important;
+        }
+        
+        .instruments-table tr.highlighted-row td {
+            font-weight: bold !important;
+        }
+        
+        /* Рамка для выделенных колонок в выделенных строках */
+        .instruments-table tr.highlighted-row td:nth-child(6),
+        .instruments-table tr.highlighted-row td:nth-child(7),
+        .instruments-table tr.highlighted-row td:nth-child(8),
+        .instruments-table tr.highlighted-row td:nth-child(10),
+        .instruments-table tr.highlighted-row td:nth-child(12),
+        .instruments-table tr.highlighted-row td:nth-child(13) {
+            border: 2px solid #667eea !important;
+            border-radius: 4px;
+            padding: 4px 8px !important;
+            background-color: rgba(102, 126, 234, 0.05) !important;
+        }
+        
+        /* Жирный шрифт для заголовков выделенных колонок */
+        .instruments-table thead th:nth-child(6),
+        .instruments-table thead th:nth-child(7),
+        .instruments-table thead th:nth-child(8),
+        .instruments-table thead th:nth-child(10),
+        .instruments-table thead th:nth-child(12),
+        .instruments-table thead th:nth-child(13) {
+            font-weight: bold !important;
+        }
+        
         .instrument-symbol {
             font-weight: 500;
             color: #1f2937;
@@ -1609,6 +1635,46 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
             
             <div class="section">
                 <h2>📅 Срочные фьючерсы</h2>
+                <div style="margin-bottom: 20px; padding: 15px; background: rgba(255, 255, 255, 0.7); border-radius: 8px;">
+                    <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <label for="capital-input" style="font-weight: 600; color: #374151;">Капитал (USDT):</label>
+                            <input type="number" id="capital-input" value="50000" min="1" step="1" 
+                                   style="padding: 8px 12px; border: 2px solid #e5e7eb; border-radius: 6px; font-size: 14px; width: 120px;">
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <label for="leverage-input" style="font-weight: 600; color: #374151;">Плечо (x):</label>
+                            <input type="number" id="leverage-input" value="20" min="1" max="200" step="1" 
+                                   style="padding: 8px 12px; border: 2px solid #e5e7eb; border-radius: 6px; font-size: 14px; width: 80px;">
+                        </div>
+                        <button onclick="updateContractsCount()" 
+                                style="padding: 8px 20px; background: #667eea; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 14px; transition: background 0.3s;"
+                                onmouseover="this.style.background='#5568d3'" 
+                                onmouseout="this.style.background='#667eea'">
+                            Обновить
+                        </button>
+                        <div style="display: flex; align-items: center; gap: 10px; margin-left: auto;">
+                            <span style="font-weight: 600; color: #374151;">Количество контрактов:</span>
+                            <span id="contracts-count" style="color: #667eea; font-weight: 600; font-size: 16px;">-</span>
+                        </div>
+                    </div>
+                    <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap; margin-top: 15px; padding-top: 15px; border-top: 1px solid #e5e7eb;">
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <label for="return-threshold-input" style="font-weight: 600; color: #374151;">Порог доходности на капитал (% годовых):</label>
+                            <input type="number" id="return-threshold-input" value="50" min="0" step="0.1" 
+                                   style="padding: 8px 12px; border: 2px solid #e5e7eb; border-radius: 6px; font-size: 14px; width: 120px;">
+                        </div>
+                        <button onclick="updateReturnThreshold()" 
+                                style="padding: 8px 20px; background: #10b981; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 14px; transition: background 0.3s;"
+                                onmouseover="this.style.background='#059669'" 
+                                onmouseout="this.style.background='#10b981'">
+                            Сохранить порог
+                        </button>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <span style="font-size: 0.9em; color: #6b7280;">При доходности выше порога будет отправлено уведомление в Telegram</span>
+                        </div>
+                    </div>
+                </div>
                 <div id="futures-container">
                     <div class="loading">Загрузка данных...</div>
                 </div>
@@ -1629,6 +1695,8 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
     
     <script>
         let updateInterval = null;
+        // Глобальная переменная для хранения цены бессрочного фьючерса
+        let globalPerpetualMarkPrice = null;
         
         function formatPrice(price) {
             return new Intl.NumberFormat('ru-RU', {
@@ -1656,6 +1724,313 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
             }
         }
         
+        function updateReturnThreshold() {
+            const thresholdInput = document.getElementById('return-threshold-input');
+            if (!thresholdInput) return;
+            
+            const threshold = parseFloat(thresholdInput.value);
+            if (isNaN(threshold) || threshold < 0) {
+                alert('Введите корректное значение порога (от 0 и выше)');
+                return;
+            }
+            
+            // Отправляем запрос на обновление конфигурации
+            fetch('/api/config', {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    return_on_capital_threshold: threshold
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Порог доходности успешно сохранен: ' + threshold + '% годовых');
+                } else {
+                    alert('Ошибка при сохранении порога: ' + (data.message || 'Неизвестная ошибка'));
+                }
+            })
+            .catch(error => {
+                console.error('Ошибка при сохранении порога:', error);
+                alert('Ошибка при сохранении порога');
+            });
+        }
+        
+        function updateContractsCount() {
+            console.log('Кнопка "Обновить" нажата');
+            
+            const capitalInput = document.getElementById('capital-input');
+            const leverageInput = document.getElementById('leverage-input');
+            const contractsCountEl = document.getElementById('contracts-count');
+            
+            if (!capitalInput || !leverageInput || !contractsCountEl) {
+                console.error('Не найдены элементы ввода:', {
+                    capitalInput: !!capitalInput,
+                    leverageInput: !!leverageInput,
+                    contractsCountEl: !!contractsCountEl
+                });
+                return;
+            }
+            
+            const capital = parseFloat(capitalInput.value) || 0;
+            const leverage = parseFloat(leverageInput.value) || 100;
+            
+            if (capital <= 0 || leverage <= 0) {
+                contractsCountEl.textContent = '-';
+                return;
+            }
+            
+            // Получаем цену бессрочного фьючерса из глобальной переменной
+            const perpetualMarkPrice = globalPerpetualMarkPrice;
+            
+            if (!perpetualMarkPrice || perpetualMarkPrice <= 0) {
+                console.error('Цена бессрочного фьючерса не установлена!');
+                contractsCountEl.textContent = 'Ошибка: нет цены';
+                return;
+            }
+            
+            console.log('Используемая цена для расчета:', {
+                perpetualPrice: perpetualMarkPrice,
+                fromGlobal: globalPerpetualMarkPrice
+            });
+            
+            // Initial Margin Rate рассчитывается на основе плеча
+            // Initial Margin Rate = 1 / Leverage
+            const initialMarginRate = 1 / leverage;
+            const contractSize = 1;
+            
+            // Рассчитываем количество контрактов
+            // Капитал делится на 2 (для срочного и бессрочного) и на Initial Margin
+            // Используем цену БЕССРОЧНОГО фьючерса для расчета
+            const contractsPerSide = capital / 2 / (perpetualMarkPrice * contractSize * initialMarginRate);
+            const contractsCount = Math.floor(contractsPerSide);
+            
+            // Отладочный вывод
+            console.log('Расчет количества контрактов:', {
+                capital: capital,
+                leverage: leverage,
+                perpetualPrice: perpetualMarkPrice,
+                initialMarginRate: initialMarginRate,
+                contractSize: contractSize,
+                denominator: perpetualMarkPrice * contractSize * initialMarginRate,
+                contractsPerSide: contractsPerSide,
+                contractsCount: contractsCount
+            });
+            
+            // Проверка на валидность результата
+            if (isNaN(contractsCount) || contractsCount < 0) {
+                console.error('Ошибка в расчете количества контрактов!', {
+                    capital, leverage, perpetualPrice: perpetualMarkPrice, initialMarginRate, contractsPerSide
+                });
+                contractsCountEl.textContent = 'Ошибка';
+                return;
+            }
+            
+            contractsCountEl.textContent = contractsCount;
+            
+            // Обновляем таблицу фьючерсов, если она уже отображена
+            // Пересчитываем чистую прибыль в USDT для всех строк без перезагрузки данных
+            const futuresContainer = document.getElementById('futures-container');
+            if (futuresContainer && futuresContainer.querySelector('table')) {
+                // Обновляем только расчеты чистой прибыли в USDT, не перезагружая данные
+                // Передаем рассчитанные значения, чтобы избежать повторного расчета
+                updateNetProfitUSDT(contractsCount, perpetualMarkPrice);
+            }
+            
+            // Убеждаемся, что WebSocket продолжает работать после обновления
+            // Проверяем состояние WebSocket и переподключаемся при необходимости
+            // Проверяем через setTimeout, чтобы переменные были объявлены
+            setTimeout(() => {
+                try {
+                    if (typeof wsInstruments !== 'undefined' && wsInstruments && typeof WebSocket !== 'undefined') {
+                        const OPEN_STATE = 1; // WebSocket.OPEN = 1
+                        if (wsInstruments.readyState !== OPEN_STATE) {
+                            console.log('WebSocket не подключен после обновления, переподключаемся...');
+                            if (typeof connectInstrumentsWebSocket === 'function') {
+                                connectInstrumentsWebSocket();
+                            }
+                        } else {
+                            console.log('WebSocket продолжает работать после обновления');
+                        }
+                    }
+                } catch (e) {
+                    console.warn('Ошибка при проверке WebSocket:', e);
+                }
+            }, 100);
+        }
+        
+        function updateNetProfitUSDT(contractsCount, perpetualMarkPrice) {
+            // Если параметры не переданы или невалидны, не делаем расчет
+            if (!contractsCount || contractsCount <= 0 || !perpetualMarkPrice || perpetualMarkPrice <= 0) {
+                console.warn('Недостаточно данных для расчета чистой прибыли в USDT:', {
+                    contractsCount: contractsCount,
+                    perpetualMarkPrice: perpetualMarkPrice
+                });
+                return;
+            }
+            
+            console.log('Обновление чистой прибыли в USDT', {
+                contractsCount: contractsCount,
+                perpetualMarkPrice: perpetualMarkPrice
+            });
+            
+            // Обновляем только колонку с чистой прибылью в USDT для всех строк таблицы
+            const futuresContainer = document.getElementById('futures-container');
+            if (!futuresContainer) {
+                console.warn('Контейнер фьючерсов не найден');
+                return;
+            }
+            
+            const table = futuresContainer.querySelector('table');
+            if (!table) {
+                console.warn('Таблица фьючерсов не найдена');
+                return;
+            }
+            
+            const rows = table.querySelectorAll('tbody tr');
+            if (rows.length === 0) {
+                console.warn('Строки в таблице фьючерсов не найдены');
+                return;
+            }
+            
+            console.log('Найдено строк в таблице:', rows.length);
+            
+            // Обновляем каждую строку таблицы
+            rows.forEach(row => {
+                // Находим ячейку с чистой прибылью в процентах (колонка "Чистая прибыль (на базе FR за кол-во дней до экспирации)")
+                // Индексы колонок: 0-символ, 1-дни, 2-Mark Price, 3-Справедливая (скрыта), 4-Last (скрыта), 
+                // 5-Спред %, 6-Справедливый спред %, 7-FR за кол-во дней, 8-FR стандартный, 
+                // 9-Чистая прибыль (на базе FR) <- это нужно, 10-Чистая прибыль (стандартный FR), 11-USDT, 12-Доходность на капитал
+                const netProfitPercentCell = row.querySelectorAll('td')[9]; // Индекс колонки "Чистая прибыль (на базе FR за кол-во дней до экспирации)"
+                if (!netProfitPercentCell) return;
+                
+                // Получаем значение чистой прибыли в процентах из текста ячейки
+                // Важно сохранить знак минус, если он есть
+                // Используем и textContent и innerHTML для надежности
+                const cellText = netProfitPercentCell.textContent.trim();
+                const cellHTML = netProfitPercentCell.innerHTML.trim();
+                
+                // Проверяем, есть ли знак минус в исходном тексте (в textContent или innerHTML)
+                const hasMinus = cellText.includes('-') || cellHTML.includes('-');
+                
+                // Извлекаем число (может быть с минусом)
+                // Ищем паттерн: минус (опционально), затем цифры и точка
+                const numberMatch = cellText.match(/-?\d+\.?\d*/);
+                let netProfitPercent = 0;
+                
+                if (numberMatch) {
+                    netProfitPercent = parseFloat(numberMatch[0]);
+                } else {
+                    // Fallback: удаляем все кроме цифр и точки, затем добавляем минус если нужно
+                    let cleanText = cellText.replace(/[^0-9.-]/g, '');
+                    netProfitPercent = parseFloat(cleanText) || 0;
+                    if (hasMinus && netProfitPercent > 0) {
+                        netProfitPercent = -netProfitPercent;
+                    }
+                }
+                
+                // Дополнительная проверка: если в тексте был минус, но число положительное, делаем отрицательным
+                if (hasMinus && netProfitPercent > 0) {
+                    netProfitPercent = -netProfitPercent;
+                }
+                
+                if (isNaN(netProfitPercent)) {
+                    console.warn('Не удалось распарсить процент чистой прибыли:', cellText);
+                    return;
+                }
+                
+                console.log('Парсинг процента:', {
+                    cellText: cellText,
+                    hasMinus: hasMinus,
+                    parsedPercent: netProfitPercent
+                });
+                
+                // Размер позиции по бессрочному фьючерсу (FR начисляется только на позицию бессрочного)
+                const contractSize = 1; // Размер контракта для USDT-маржинальных контрактов
+                const perpetualPositionSize = contractsCount * perpetualMarkPrice * contractSize;
+                
+                // Чистая прибыль в USDT = Процент чистой прибыли × Размер позиции по бессрочному фьючерсу
+                // Важно: если процент отрицательный, результат тоже должен быть отрицательным
+                const netProfitUSDT = perpetualPositionSize * netProfitPercent / 100;
+                
+                // Форматируем с учетом знака
+                let netProfitUSDTDisplay;
+                if (netProfitUSDT > 0) {
+                    netProfitUSDTDisplay = `$${netProfitUSDT.toFixed(2)}`;
+                } else if (netProfitUSDT < 0) {
+                    netProfitUSDTDisplay = `-$${Math.abs(netProfitUSDT).toFixed(2)}`;
+                } else {
+                    netProfitUSDTDisplay = '$0.00';
+                }
+                
+                // Обновляем ячейку с чистой прибылью в USDT (12-я колонка, индекс 11)
+                const netProfitUSDTCell = row.querySelectorAll('td')[11];
+                if (netProfitUSDTCell) {
+                    // Цвет зависит от знака чистой прибыли
+                    const color = netProfitUSDT > 0 ? '#10b981' : netProfitUSDT < 0 ? '#ef4444' : '#6b7280';
+                    netProfitUSDTCell.innerHTML = `<span style="color: ${color}; font-weight: 500;">${netProfitUSDTDisplay}</span>`;
+                }
+                
+                // Обновляем ячейку с доходностью на капитал (13-я колонка, индекс 12)
+                // Получаем количество дней до экспирации из второй колонки (индекс 1)
+                const daysUntilExpCell = row.querySelectorAll('td')[1];
+                let daysUntilExpValue = null;
+                if (daysUntilExpCell) {
+                    const daysText = daysUntilExpCell.textContent.trim();
+                    const daysMatch = daysText.match(/^([\d.]+)/);
+                    if (daysMatch) {
+                        daysUntilExpValue = parseFloat(daysMatch[1]);
+                    }
+                }
+                
+                // Получаем плечо из поля ввода
+                const leverageInput = document.getElementById('leverage-input');
+                const leverage = leverageInput ? parseFloat(leverageInput.value) || 20 : 20;
+                
+                // Рассчитываем доходность на капитал в % годовых
+                // Новая формула: (("Чистая прибыль в USDT" / "капитал" * 100) / "дни до экспирации") * 365
+                const returnOnCapitalCell = row.querySelectorAll('td')[12];
+                
+                // Получаем капитал из поля ввода
+                const capitalInput = document.getElementById('capital-input');
+                const capital = capitalInput ? parseFloat(capitalInput.value) || 50000 : 50000;
+                
+                if (returnOnCapitalCell && !isNaN(netProfitUSDT) && netProfitUSDT !== null && !isNaN(capital) && capital > 0 && daysUntilExpValue !== null && daysUntilExpValue > 0) {
+                    // Расчет: (чистая прибыль в USDT / капитал * 100) / дни до экспирации * 365
+                    const returnOnCapital = (netProfitUSDT / capital * 100) / daysUntilExpValue * 365;
+                    
+                    console.log('Расчет доходности на капитал:', {
+                        netProfitUSDT: netProfitUSDT,
+                        capital: capital,
+                        daysUntilExpValue: daysUntilExpValue,
+                        returnOnCapital: returnOnCapital
+                    });
+                    
+                    // Форматируем с учетом знака
+                    let returnOnCapitalDisplay;
+                    if (returnOnCapital > 0) {
+                        returnOnCapitalDisplay = returnOnCapital.toFixed(2) + '%';
+                    } else if (returnOnCapital < 0) {
+                        returnOnCapitalDisplay = returnOnCapital.toFixed(2) + '%'; // toFixed сохраняет знак минус
+                    } else {
+                        returnOnCapitalDisplay = '0.00%';
+                    }
+                    
+                    const returnOnCapitalColor = returnOnCapital > 0 ? '#10b981' : returnOnCapital < 0 ? '#ef4444' : '#6b7280';
+                    returnOnCapitalCell.innerHTML = `<span style="color: ${returnOnCapitalColor}; font-weight: 500;">${returnOnCapitalDisplay}</span>`;
+                } else if (returnOnCapitalCell) {
+                    console.warn('Недостаточно данных для расчета доходности:', {
+                        netProfitUSDT: netProfitUSDT,
+                        capital: capital,
+                        daysUntilExpValue: daysUntilExpValue
+                    });
+                    returnOnCapitalCell.innerHTML = '<span style="color: #6b7280; font-weight: 500;">N/A</span>';
+                }
+            });
+        }
+        
         function displayPerpetual(perpetual) {
             const container = document.getElementById('perpetual-container');
             
@@ -1665,15 +2040,19 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
             }
             
             const currentFR = perpetual.current_funding_rate !== undefined 
-                ? perpetual.current_funding_rate.toFixed(2) + '%'
+                ? perpetual.current_funding_rate.toFixed(3) + '%'
                 : 'N/A';
             
-            const avgFR3months = perpetual.average_funding_rate_3months !== undefined 
-                ? perpetual.average_funding_rate_3months.toFixed(2) + '%'
+            const totalFR3months = perpetual.total_funding_rate_3months !== undefined 
+                ? perpetual.total_funding_rate_3months.toFixed(3) + '%'
                 : 'N/A';
             
-            const avgFR6months = perpetual.average_funding_rate_6months !== undefined 
-                ? perpetual.average_funding_rate_6months.toFixed(2) + '%'
+            const totalFR6months = perpetual.total_funding_rate_6months !== undefined 
+                ? perpetual.total_funding_rate_6months.toFixed(3) + '%'
+                : 'N/A';
+            
+            const totalFR365days = perpetual.total_funding_rate_365days !== undefined 
+                ? perpetual.total_funding_rate_365days.toFixed(3) + '%'
                 : 'N/A';
             
             const spotPrice = perpetual.spot_price !== undefined && perpetual.spot_price !== null
@@ -1688,9 +2067,10 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
                             <th>Spot Price</th>
                             <th>Mark Price</th>
                             <th>Last Price</th>
-                            <th>FR текущий (8ч)</th>
-                            <th>FR средний за 3 мес. (8ч)</th>
-                            <th>FR средний за 6 мес. (8ч)</th>
+                            <th title="Funding rate за последний завершившийся 8 часовой интервал">FR 8ч</th>
+                            <th title="Суммарный Funding Rate, который был выплачен за последние 3 месяца от текущего времени">FR 3 мес</th>
+                            <th title="Суммарный Funding Rate, который был выплачен за последние 6 месяцев от текущего времени">FR 6 мес</th>
+                            <th title="Суммарный Funding Rate, который был выплачен за последний год">FR 1 год</th>
                             <th>Время обновления</th>
                         </tr>
                     </thead>
@@ -1701,13 +2081,23 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
                             <td class="price mark">${formatPrice(perpetual.mark_price)}</td>
                             <td class="price last">${formatPrice(perpetual.last_price)}</td>
                             <td class="price" style="color: #3b82f6;">${currentFR}</td>
-                            <td class="price" style="color: #8b5cf6;">${avgFR3months}</td>
-                            <td class="price" style="color: #f59e0b;">${avgFR6months}</td>
+                            <td class="price" style="color: #8b5cf6;">${totalFR3months}</td>
+                            <td class="price" style="color: #f59e0b;">${totalFR6months}</td>
+                            <td class="price" style="color: #ef4444;">${totalFR365days}</td>
                             <td class="timestamp">${formatTimestamp(perpetual.timestamp)}</td>
                         </tr>
                     </tbody>
                 </table>
             `;
+            
+            // Сохраняем цену бессрочного фьючерса в глобальную переменную
+            if (perpetual.mark_price !== undefined && perpetual.mark_price !== null) {
+                globalPerpetualMarkPrice = perpetual.mark_price;
+                console.log('Установлена цена бессрочного фьючерса:', globalPerpetualMarkPrice);
+            }
+            
+            // Обновляем количество контрактов после отображения данных бессрочного фьючерса
+            updateContractsCount();
         }
         
         function displayFutures(futures) {
@@ -1725,14 +2115,16 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
                             <th>Символ</th>
                             <th>Дней до экспирации</th>
                             <th>Mark Price</th>
-                            <th>Справедливая цена</th>
-                            <th>Last Price</th>
-                            <th>Спред %</th>
-                            <th>Справедливый спред %</th>
-                            <th>Суммарный FR за кол-во дней до экспирации</th>
-                            <th>Суммарный FR (стандартный) за кол-во дней до экспирации</th>
-                            <th>Чистая прибыль (суммарный FR за кол-во дней до экспирации)</th>
-                            <th>Чистая прибыль (стандартный FR)</th>
+                            <th style="display: none;">Справедливая цена</th>
+                            <th style="display: none;">Last Price</th>
+                            <th title="Разница между ценой срочного и бессрочного фьючерса в %">Спред %</th>
+                            <th title="Спред между бессрочным фьючерсом и расчетной справедливой ценой срочного фьючерса">Справедливый спред %</th>
+                            <th title="Суммарный Funding Rate, который был выплачен за количество дней, эквивалентное количеству дней до экспирации срочного фьючерса">FR за кол-во дней до экспирации</th>
+                            <th title="Суммарный Funding Rate, который был БЫ выплачен за количество дней, эквивалентное количеству дней до экспирации срочного фьючерса, если бы ставка была базовой 0,01% за каждые 8 часов">FR (стандартный) за кол-во дней до экспирации</th>
+                            <th title="Чистая прибыль, которую инвестор заработает, если войдет в сделку, и Funding Rate будет сохраняться таким же, как он был за последний интервал, эквивалентный кол-ву дней до экспирации">Чистая прибыль (на базе FR за кол-во дней до экспирации)</th>
+                            <th title="Чистая прибыль в % от размера позиции по бессрочному фьючерсу, которую инвестор получит, в случае если Funding Rate будет сохраняться на стандартном уровне в 0.01% каждые 8 часов">Чистая прибыль (стандартный FR)</th>
+                            <th title="Чистая прибыль, рассчитанная в USDT, рассчитывается на основе % чистой прибыли, рассчитанной на исторических значения Funding Rate за период, эквивалентный сроку до экспирации">Чистая прибыль (USDT)</th>
+                            <th title="Доходность на вложенный капитал, который указан в поле &quot;Капитал&quot;, выраженная в % годовых с учетом срока экспирации">Доходность на капитал (% годовых)</th>
                             <th>Время обновления</th>
                         </tr>
                     </thead>
@@ -1750,32 +2142,32 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
                     : 'N/A';
                 
                 const spreadPercent = future.spread_percent !== undefined && future.spread_percent !== null
-                    ? future.spread_percent.toFixed(2) + '%'
+                    ? future.spread_percent.toFixed(3) + '%'
                     : 'N/A';
                 
                 // Справедливый спред % = (fair_price - mark_price) / mark_price * 100
                 const fairSpreadPercent = future.fair_spread_percent !== undefined && future.fair_spread_percent !== null
-                    ? future.fair_spread_percent.toFixed(2) + '%'
+                    ? future.fair_spread_percent.toFixed(3) + '%'
                     : 'N/A';
                 
                 // Суммарный FR за кол-во дней до экспирации (рассчитан на основе суммарного FR за количество дней, равное дням до экспирации)
                 const frUntilExpCurrent = future.funding_rate_until_expiration !== undefined && future.funding_rate_until_expiration !== null
-                    ? future.funding_rate_until_expiration.toFixed(2) + '%'
+                    ? future.funding_rate_until_expiration.toFixed(3) + '%'
                     : 'N/A';
                 
                 // Стандартный Funding Rate до экспирации (0.01% за 8 часов)
                 const standardFRUntilExp = future.standard_funding_rate_until_expiration !== undefined && future.standard_funding_rate_until_expiration !== null
-                    ? future.standard_funding_rate_until_expiration.toFixed(2) + '%'
+                    ? future.standard_funding_rate_until_expiration.toFixed(3) + '%'
                     : 'N/A';
                 
                 // Чистая прибыль (суммарный FR за кол-во дней до экспирации): FR до экспирации - Спред % - Комиссии
                 const netProfitCurrentFR = future.net_profit_current_fr !== undefined && future.net_profit_current_fr !== null
-                    ? future.net_profit_current_fr.toFixed(2) + '%'
+                    ? future.net_profit_current_fr.toFixed(3) + '%'
                     : 'N/A';
                 
                 // Чистая прибыль (стандартный FR): суммарный стандартный FR до экспирации - Спред % - Комиссии
                 const netProfitStandardFR = future.net_profit_standard_fr !== undefined && future.net_profit_standard_fr !== null
-                    ? future.net_profit_standard_fr.toFixed(2) + '%'
+                    ? future.net_profit_standard_fr.toFixed(3) + '%'
                     : 'N/A';
                 
                 // Цвет для спреда
@@ -1804,19 +2196,140 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
                     ? (netProfitStandardFRValue > 0 ? '#10b981' : '#ef4444')
                     : '#6b7280';
                 
+                // Проверка условия для выделения строки жирным шрифтом
+                // Если "Спред %" < "FR за кол-во дней до экспирации" И "Спред %" < "Справедливый спред %" И "Чистая прибыль (на базе FR за кол-во дней до экспирации)" > 0
+                const spreadPercentValue = future.spread_percent !== undefined && future.spread_percent !== null ? future.spread_percent : null;
+                const frUntilExpValue = future.funding_rate_until_expiration !== undefined && future.funding_rate_until_expiration !== null ? future.funding_rate_until_expiration : null;
+                const fairSpreadPercentValue = future.fair_spread_percent !== undefined && future.fair_spread_percent !== null ? future.fair_spread_percent : null;
+                // netProfitCurrentFRValue уже определен выше
+                
+                const shouldHighlight = spreadPercentValue !== null && 
+                                       frUntilExpValue !== null && 
+                                       fairSpreadPercentValue !== null &&
+                                       netProfitCurrentFRValue !== null &&
+                                       spreadPercentValue < frUntilExpValue &&
+                                       spreadPercentValue < fairSpreadPercentValue &&
+                                       netProfitCurrentFRValue > 0;
+                
+                // Отладочный вывод (можно убрать после проверки)
+                if (shouldHighlight) {
+                    console.log(`Выделение строки ${future.symbol}:`, {
+                        spread: spreadPercentValue,
+                        fr: frUntilExpValue,
+                        fairSpread: fairSpreadPercentValue,
+                        netProfit: netProfitCurrentFRValue
+                    });
+                }
+                
+                // Применяем жирный шрифт ко всей строке
+                const rowStyle = shouldHighlight ? 'font-weight: bold !important;' : '';
+                const rowClass = shouldHighlight ? 'highlighted-row' : '';
+                
+                // Расчет чистой прибыли в USDT
+                // Получаем капитал и плечо из полей ввода
+                const capitalInput = document.getElementById('capital-input');
+                const leverageInput = document.getElementById('leverage-input');
+                const capital = capitalInput ? parseFloat(capitalInput.value) || 50000 : 50000;
+                const leverage = leverageInput ? parseFloat(leverageInput.value) || 20 : 20;
+                
+                // Получаем цену бессрочного фьючерса
+                const perpetualMarkPrice = globalPerpetualMarkPrice;
+                
+                // Переменные для чистой прибыли в USDT
+                let netProfitUSDTDisplay;
+                let netProfitUSDTColor;
+                let netProfitUSDT = 0; // Объявляем вне блока для использования в расчете доходности
+                
+                // Если цена бессрочного фьючерса не установлена, не рассчитываем чистую прибыль в USDT
+                if (!perpetualMarkPrice || perpetualMarkPrice <= 0) {
+                    netProfitUSDTDisplay = 'N/A';
+                    netProfitUSDTColor = '#6b7280';
+                    netProfitUSDT = 0;
+                } else {
+                    // Initial Margin Rate рассчитывается на основе плеча
+                    // Initial Margin Rate = 1 / Leverage
+                    const initialMarginRate = 1 / leverage;
+                    const contractSize = 1; // Размер контракта для USDT-маржинальных контрактов
+                    
+                    // Рассчитываем количество контрактов
+                    // Капитал делится на 2 (для срочного и бессрочного) и на Initial Margin
+                    // Используем цену БЕССРОЧНОГО фьючерса для расчета
+                    const contractsPerSide = capital / 2 / (perpetualMarkPrice * contractSize * initialMarginRate);
+                    const contractsCount = Math.floor(contractsPerSide); // Округляем вниз
+                    
+                    // Размер позиции по бессрочному фьючерсу (FR начисляется только на позицию бессрочного)
+                    const perpetualPositionSize = contractsCount * perpetualMarkPrice * contractSize;
+                    
+                    // Чистая прибыль в USDT = Процент чистой прибыли × Размер позиции по бессрочному фьючерсу
+                    // Важно: если процент отрицательный, результат тоже должен быть отрицательным
+                    netProfitUSDT = netProfitCurrentFRValue !== null && perpetualMarkPrice > 0
+                        ? (perpetualPositionSize * netProfitCurrentFRValue / 100)
+                        : 0;
+                    
+                    // Форматируем с учетом знака
+                    if (netProfitUSDT > 0) {
+                        netProfitUSDTDisplay = `$${netProfitUSDT.toFixed(2)}`;
+                    } else if (netProfitUSDT < 0) {
+                        netProfitUSDTDisplay = `-$${Math.abs(netProfitUSDT).toFixed(2)}`;
+                    } else {
+                        netProfitUSDTDisplay = '$0.00';
+                    }
+                    
+                    // Цвет зависит от знака чистой прибыли в USDT
+                    netProfitUSDTColor = netProfitUSDT > 0 ? '#10b981' : netProfitUSDT < 0 ? '#ef4444' : '#6b7280';
+                }
+                
+                // Расчет доходности на капитал в % годовых
+                // Новая формула: (("Чистая прибыль в USDT" / "капитал" * 100) / "дни до экспирации") * 365
+                let returnOnCapitalDisplay;
+                let returnOnCapitalColor;
+                const daysUntilExpValue = future.days_until_expiration !== undefined && future.days_until_expiration !== null 
+                    ? future.days_until_expiration 
+                    : null;
+                
+                // Используем чистую прибыль в USDT (уже рассчитана выше)
+                // Проверяем, что все значения валидны
+                if (!isNaN(netProfitUSDT) && netProfitUSDT !== 0 && !isNaN(capital) && capital > 0 && daysUntilExpValue !== null && daysUntilExpValue > 0) {
+                    // Расчет: (чистая прибыль в USDT / капитал * 100) / дни до экспирации * 365
+                    const returnOnCapital = (netProfitUSDT / capital * 100) / daysUntilExpValue * 365;
+                    
+                    console.log('Расчет доходности в displayFutures:', {
+                        netProfitUSDT: netProfitUSDT,
+                        capital: capital,
+                        daysUntilExpValue: daysUntilExpValue,
+                        returnOnCapital: returnOnCapital
+                    });
+                    
+                    // Форматируем с учетом знака
+                    if (returnOnCapital > 0) {
+                        returnOnCapitalDisplay = returnOnCapital.toFixed(2) + '%';
+                    } else if (returnOnCapital < 0) {
+                        returnOnCapitalDisplay = returnOnCapital.toFixed(2) + '%'; // toFixed сохраняет знак минус
+                    } else {
+                        returnOnCapitalDisplay = '0.00%';
+                    }
+                    
+                    returnOnCapitalColor = returnOnCapital > 0 ? '#10b981' : returnOnCapital < 0 ? '#ef4444' : '#6b7280';
+                } else {
+                    returnOnCapitalDisplay = 'N/A';
+                    returnOnCapitalColor = '#6b7280';
+                }
+                
                 html += `
-                    <tr>
+                    <tr class="${rowClass}" style="${rowStyle}">
                         <td class="instrument-symbol">${future.symbol}</td>
                         <td class="timestamp">${daysUntilExp}</td>
                         <td class="price mark">${formatPrice(future.mark_price)}</td>
-                        <td class="price" style="color: #8b5cf6; font-weight: 500;">${fairFuturesPrice}</td>
-                        <td class="price last">${formatPrice(future.last_price)}</td>
+                        <td class="price" style="color: #8b5cf6; font-weight: 500; display: none;">${fairFuturesPrice}</td>
+                        <td class="price last" style="display: none;">${formatPrice(future.last_price)}</td>
                         <td class="price" style="color: ${spreadColor};">${spreadPercent}</td>
                         <td class="price" style="color: ${fairSpreadColor};">${fairSpreadPercent}</td>
                         <td class="price" style="color: #667eea;">${frUntilExpCurrent}</td>
                         <td class="price" style="color: #10b981;">${standardFRUntilExp}</td>
                         <td class="price" style="color: ${netProfitCurrentFRColor}; font-weight: 500;">${netProfitCurrentFR}</td>
                         <td class="price" style="color: ${netProfitStandardFRColor}; font-weight: 500;">${netProfitStandardFR}</td>
+                        <td class="price" style="color: ${netProfitUSDTColor}; font-weight: 500;">${netProfitUSDTDisplay}</td>
+                        <td class="price" style="color: ${returnOnCapitalColor}; font-weight: 500;">${returnOnCapitalDisplay}</td>
                         <td class="timestamp">${formatTimestamp(future.timestamp)}</td>
                     </tr>
                 `;
@@ -1864,7 +2377,7 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
                         <td>${trade.name}</td>
                         <td>${trade.instrument}</td>
                         <td>Maker (лимитный)</td>
-                        <td class="fee-value">${trade.fee.toFixed(2)}%</td>
+                        <td class="fee-value">${trade.fee.toFixed(3)}%</td>
                         <td>VIP2</td>
                     </tr>
                 `;
@@ -1874,13 +2387,13 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
                         <tr class="fee-total">
                             <td colspan="2"><strong>ИТОГО комиссий:</strong></td>
                             <td></td>
-                            <td class="fee-value" style="font-weight: 500;"><strong>${totalFee.toFixed(2)}%</strong></td>
-                            <td>4 сделки × ${VIP2_MAKER_FEE.toFixed(2)}%</td>
+                            <td class="fee-value" style="font-weight: 500;"><strong>${totalFee.toFixed(3)}%</strong></td>
+                            <td>4 сделки × ${VIP2_MAKER_FEE.toFixed(3)}%</td>
                         </tr>
                     </tbody>
                 </table>
                 <div style="margin-top: 15px; padding: 10px; background: #f3f4f6; border-radius: 8px; font-size: 0.85em; color: #6b7280;">
-                    <strong>Примечание:</strong> Комиссии вычитаются из чистой прибыли в колонках "Чистая прибыль (суммарный FR за кол-во дней до экспирации)" и "Чистая прибыль (стандартный FR)". Суммарный FR рассчитывается за количество дней, равное количеству дней до экспирации конкретного фьючерса.
+                    <strong>Примечание:</strong> Комиссии вычитаются из чистой прибыли в колонках "Чистая прибыль (на базе FR за кол-во дней до экспирации)" и "Чистая прибыль (стандартный FR)". FR рассчитывается за количество дней, равное количеству дней до экспирации конкретного фьючерса.
                 </div>
             `;
             
@@ -1925,8 +2438,15 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
                 } else {
                     console.warn('Данные perpetual не найдены');
                 }
+                // Сначала обновляем perpetual, чтобы установить globalPerpetualMarkPrice
+                if (data.perpetual) {
+                    displayPerpetual(data.perpetual);
+                }
+                // Затем обновляем futures, чтобы использовать установленную цену
                 if (data.futures && Array.isArray(data.futures)) {
-                    displayFutures(data.futures);
+                    setTimeout(() => {
+                        displayFutures(data.futures);
+                    }, 10);
                 } else {
                     console.warn('Данные futures не найдены или не массив');
                 }
@@ -1935,13 +2455,16 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
                 // Обновляем безрисковую ставку
                 if (data.risk_free_rate_annual !== undefined) {
                     document.getElementById('risk-free-rate').textContent = 
-                        data.risk_free_rate_annual.toFixed(2);
+                        data.risk_free_rate_annual.toFixed(3);
                 }
                 
                 // Обновляем время последнего обновления
                 const now = new Date();
                 document.getElementById('last-update').textContent = 
                     now.toLocaleString('ru-RU');
+                
+                // Обновляем количество контрактов после загрузки данных
+                updateContractsCount();
                 
             } catch (error) {
                 console.error('Ошибка при загрузке данных:', error);
@@ -1954,10 +2477,27 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
             }
         }
         
+        // Загрузка порога доходности из конфигурации
+        function loadReturnThreshold() {
+            fetch('/api/config')
+                .then(response => response.json())
+                .then(data => {
+                    const thresholdInput = document.getElementById('return-threshold-input');
+                    if (thresholdInput && data.return_on_capital_threshold !== undefined) {
+                        thresholdInput.value = data.return_on_capital_threshold;
+                    }
+                })
+                .catch(error => {
+                    console.error('Ошибка при загрузке порога доходности:', error);
+                });
+        }
+        
         // Ждем полной загрузки DOM
         if (document.readyState === 'loading') {
             document.addEventListener('DOMContentLoaded', function() {
                 console.log('DOM загружен, запускаем загрузку данных');
+                // Загружаем порог доходности
+                loadReturnThreshold();
                 // Отображаем таблицу комиссий
                 displayFees();
                 // Загружаем начальные данные через HTTP
@@ -1965,6 +2505,8 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
             });
         } else {
             console.log('DOM уже загружен, запускаем загрузку данных');
+            // Загружаем порог доходности
+            loadReturnThreshold();
             // Отображаем таблицу комиссий сразу
             displayFees();
             // Загружаем начальные данные через HTTP
@@ -2008,17 +2550,22 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
                         // Обновляем данные на странице
                         updateStatus(true);
                         
+                        // Сначала обновляем perpetual, чтобы установить globalPerpetualMarkPrice
                         if (message.data.perpetual) {
                             displayPerpetual(message.data.perpetual);
                         }
+                        // Затем обновляем futures, чтобы использовать установленную цену
+                        // Используем setTimeout, чтобы globalPerpetualMarkPrice успела установиться
                         if (message.data.futures) {
-                            displayFutures(message.data.futures);
+                            setTimeout(() => {
+                                displayFutures(message.data.futures);
+                            }, 10);
                         }
                         
                         // Обновляем безрисковую ставку
                         if (message.data.risk_free_rate_annual !== undefined) {
                             document.getElementById('risk-free-rate').textContent = 
-                                message.data.risk_free_rate_annual.toFixed(2);
+                                message.data.risk_free_rate_annual.toFixed(3);
                         }
                         
                         // Отображаем таблицу комиссий

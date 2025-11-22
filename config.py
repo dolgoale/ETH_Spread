@@ -4,7 +4,8 @@
 import os
 import json
 import threading
-from typing import List, Dict, Optional
+import shutil
+from typing import List, Dict, Optional, Tuple
 from pathlib import Path
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
@@ -35,6 +36,9 @@ class Settings(BaseSettings):
     spread_threshold_percent: float = float(os.getenv("SPREAD_THRESHOLD_PERCENT", "0.5"))
     funding_rate_history_days: int = int(os.getenv("FUNDING_RATE_HISTORY_DAYS", "7"))
     monitoring_interval_seconds: int = int(os.getenv("MONITORING_INTERVAL_SECONDS", "5"))
+    return_on_capital_threshold: float = float(os.getenv("RETURN_ON_CAPITAL_THRESHOLD", "50.0"))
+    capital_usdt: float = float(os.getenv("CAPITAL_USDT", "50000"))
+    leverage: int = int(os.getenv("LEVERAGE", "20"))
     
     # Web Server
     web_server_host: str = os.getenv("WEB_SERVER_HOST", "0.0.0.0")
@@ -42,12 +46,7 @@ class Settings(BaseSettings):
     
     # Symbols (изменяемые через веб-интерфейс)
     perpetual_symbol: str = os.getenv("PERPETUAL_SYMBOL", "ETHUSDT")
-    futures_symbols: str = os.getenv("FUTURES_SYMBOLS", "ETHUSDT-26DEC25,ETHUSDT-26JUN26,ETHUSDT-25SEP26")
-    
-    @property
-    def futures_symbols_list(self) -> List[str]:
-        """Список символов срочных фьючерсов"""
-        return [s.strip() for s in self.futures_symbols.split(",") if s.strip()]
+    # Символы срочных фьючерсов теперь получаются динамически через get_available_futures
     
     def to_dict(self) -> Dict:
         """Преобразовать в словарь для API"""
@@ -55,9 +54,10 @@ class Settings(BaseSettings):
             "spread_threshold_percent": self.spread_threshold_percent,
             "funding_rate_history_days": self.funding_rate_history_days,
             "monitoring_interval_seconds": self.monitoring_interval_seconds,
+            "return_on_capital_threshold": self.return_on_capital_threshold,
+            "capital_usdt": self.capital_usdt,
+            "leverage": self.leverage,
             "perpetual_symbol": self.perpetual_symbol,
-            "futures_symbols": self.futures_symbols,
-            "futures_symbols_list": self.futures_symbols_list,
             "web_server_host": self.web_server_host,
             "web_server_port": self.web_server_port,
         }
@@ -82,18 +82,17 @@ class Settings(BaseSettings):
             if "monitoring_interval_seconds" in data:
                 self.monitoring_interval_seconds = int(data["monitoring_interval_seconds"])
             
+            if "return_on_capital_threshold" in data:
+                self.return_on_capital_threshold = float(data["return_on_capital_threshold"])
+            
+            if "capital_usdt" in data:
+                self.capital_usdt = float(data["capital_usdt"])
+            
+            if "leverage" in data:
+                self.leverage = int(data["leverage"])
+            
             if "perpetual_symbol" in data:
                 self.perpetual_symbol = str(data["perpetual_symbol"]).strip()
-            
-            if "futures_symbols" in data:
-                self.futures_symbols = str(data["futures_symbols"]).strip()
-            
-            if "futures_symbols_list" in data:
-                # Если передан список, преобразуем в строку
-                if isinstance(data["futures_symbols_list"], list):
-                    self.futures_symbols = ",".join([str(s).strip() for s in data["futures_symbols_list"]])
-                else:
-                    self.futures_symbols = str(data["futures_symbols_list"]).strip()
             
             return True
         except (ValueError, TypeError) as e:
@@ -118,17 +117,37 @@ def load_config_from_file() -> Optional[Dict]:
         return None
 
 
-def save_config_to_file(config_dict: Dict) -> bool:
-    """Сохранить конфигурацию в файл"""
+def save_config_to_file(config_dict: Dict) -> Tuple[bool, str]:
+    """Сохранить конфигурацию в файл
+    
+    Returns:
+        Кортеж (успех, сообщение об ошибке)
+    """
     try:
         with _config_lock:
+            # Проверяем, не является ли путь директорией (известная проблема Docker)
+            if CONFIG_FILE.exists() and CONFIG_FILE.is_dir():
+                logger.warning(f"{CONFIG_FILE} является директорией, удаляем её")
+                shutil.rmtree(CONFIG_FILE)
+            
+            # Создаем директорию, если её нет
+            CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(config_dict, f, indent=2, ensure_ascii=False)
         logger.info(f"Конфигурация сохранена в {CONFIG_FILE}")
-        return True
+        return True, ""
+    except PermissionError as e:
+        error_msg = f"Нет прав на запись в файл {CONFIG_FILE}: {e}"
+        logger.error(error_msg)
+        return False, error_msg
+    except OSError as e:
+        error_msg = f"Ошибка файловой системы при сохранении {CONFIG_FILE}: {e}"
+        logger.error(error_msg)
+        return False, error_msg
     except Exception as e:
-        logger.error(f"Ошибка при сохранении конфигурации: {e}")
-        return False
+        error_msg = f"Ошибка при сохранении конфигурации в {CONFIG_FILE}: {e}"
+        logger.error(error_msg)
+        return False, error_msg
 
 
 def get_updatable_config() -> Dict:
@@ -137,9 +156,8 @@ def get_updatable_config() -> Dict:
         "spread_threshold_percent": settings.spread_threshold_percent,
         "funding_rate_history_days": settings.funding_rate_history_days,
         "monitoring_interval_seconds": settings.monitoring_interval_seconds,
+        "return_on_capital_threshold": settings.return_on_capital_threshold,
         "perpetual_symbol": settings.perpetual_symbol,
-        "futures_symbols": settings.futures_symbols,
-        "futures_symbols_list": settings.futures_symbols_list,
     }
 
 
@@ -178,14 +196,23 @@ def update_config(config_dict: Dict):
         except (ValueError, TypeError):
             return False, "Неверное значение для интервала мониторинга"
     
+    if "return_on_capital_threshold" in config_dict:
+        try:
+            threshold = float(config_dict["return_on_capital_threshold"])
+            if threshold < 0 or threshold > 1000:
+                return False, "Порог доходности на капитал должен быть от 0 до 1000%"
+        except (ValueError, TypeError):
+            return False, "Неверное значение для порога доходности на капитал"
+    
     # Обновляем настройки
     if not settings.update_from_dict(config_dict):
         return False, "Ошибка при обновлении настроек"
     
     # Сохраняем в файл
     updatable_config = get_updatable_config()
-    if not save_config_to_file(updatable_config):
-        return False, "Ошибка при сохранении конфигурации"
+    success, error_msg = save_config_to_file(updatable_config)
+    if not success:
+        return False, f"Ошибка при сохранении конфигурации: {error_msg}"
     
     return True, "Конфигурация успешно обновлена"
 

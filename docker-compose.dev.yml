@@ -23,8 +23,9 @@ services:
       - ./requirements.txt:/app/requirements.txt
       # Логи (доступны на хосте)
       - ./logs:/app/logs
-      # Динамическая конфигурация (для сохранения изменений из веб-интерфейса)
-      - ./config.json:/app/config.json
+      # Динамическая конфигурация создается внутри контейнера
+      # Монтирование отключено из-за проблем с путями, содержащими пробелы
+      # - ./config.json:/app/config.json
       # Файл логов
       - ./eth_spread_monitor.log:/app/eth_spread_monitor.log
     

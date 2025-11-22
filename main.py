@@ -15,7 +15,7 @@ import config
 
 # Настройка логирования
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Изменено на DEBUG для более детального логирования
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('eth_spread_monitor.log'),
@@ -65,7 +65,6 @@ class Application:
             bybit_client=bybit_client,
             telegram_notifier=telegram_notifier,
             perpetual_symbol=config.settings.perpetual_symbol,
-            futures_symbols=config.settings.futures_symbols_list,
             spread_threshold_percent=config.settings.spread_threshold_percent,
             funding_rate_history_days=config.settings.funding_rate_history_days
         )
