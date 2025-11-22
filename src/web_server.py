@@ -1100,9 +1100,9 @@ def get_html_template() -> str:
             if (data.funding_rate) {
                 const fr = data.funding_rate;
                 document.getElementById('current-fr').textContent = 
-                    (fr.current_rate * 100).toFixed(3) + '%';
+                    (fr.current_rate * 100).toFixed(2) + '%';
                 document.getElementById('avg-fr').textContent = 
-                    (fr.average_rate * 100).toFixed(3) + '%';
+                    (fr.average_rate * 100).toFixed(2) + '%';
             }
             
             // Обновляем спреды
@@ -1114,7 +1114,7 @@ def get_html_template() -> str:
                     const spreadItem = document.createElement('div');
                     spreadItem.className = 'spread-item';
                     
-                    const spreadPercent = spread.spread_percent.toFixed(3);
+                    const spreadPercent = spread.spread_percent.toFixed(2);
                     const isNegative = spread.spread_percent < 0;
                     
                     spreadItem.innerHTML = `
@@ -1665,15 +1665,15 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
             }
             
             const currentFR = perpetual.current_funding_rate !== undefined 
-                ? perpetual.current_funding_rate.toFixed(3) + '%'
+                ? perpetual.current_funding_rate.toFixed(2) + '%'
                 : 'N/A';
             
             const avgFR3months = perpetual.average_funding_rate_3months !== undefined 
-                ? perpetual.average_funding_rate_3months.toFixed(3) + '%'
+                ? perpetual.average_funding_rate_3months.toFixed(2) + '%'
                 : 'N/A';
             
             const avgFR6months = perpetual.average_funding_rate_6months !== undefined 
-                ? perpetual.average_funding_rate_6months.toFixed(3) + '%'
+                ? perpetual.average_funding_rate_6months.toFixed(2) + '%'
                 : 'N/A';
             
             const spotPrice = perpetual.spot_price !== undefined && perpetual.spot_price !== null
@@ -1750,32 +1750,32 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
                     : 'N/A';
                 
                 const spreadPercent = future.spread_percent !== undefined && future.spread_percent !== null
-                    ? future.spread_percent.toFixed(3) + '%'
+                    ? future.spread_percent.toFixed(2) + '%'
                     : 'N/A';
                 
                 // Справедливый спред % = (fair_price - mark_price) / mark_price * 100
                 const fairSpreadPercent = future.fair_spread_percent !== undefined && future.fair_spread_percent !== null
-                    ? future.fair_spread_percent.toFixed(3) + '%'
+                    ? future.fair_spread_percent.toFixed(2) + '%'
                     : 'N/A';
                 
                 // Суммарный FR за кол-во дней до экспирации (рассчитан на основе суммарного FR за количество дней, равное дням до экспирации)
                 const frUntilExpCurrent = future.funding_rate_until_expiration !== undefined && future.funding_rate_until_expiration !== null
-                    ? future.funding_rate_until_expiration.toFixed(3) + '%'
+                    ? future.funding_rate_until_expiration.toFixed(2) + '%'
                     : 'N/A';
                 
                 // Стандартный Funding Rate до экспирации (0.01% за 8 часов)
                 const standardFRUntilExp = future.standard_funding_rate_until_expiration !== undefined && future.standard_funding_rate_until_expiration !== null
-                    ? future.standard_funding_rate_until_expiration.toFixed(3) + '%'
+                    ? future.standard_funding_rate_until_expiration.toFixed(2) + '%'
                     : 'N/A';
                 
                 // Чистая прибыль (суммарный FR за кол-во дней до экспирации): FR до экспирации - Спред % - Комиссии
                 const netProfitCurrentFR = future.net_profit_current_fr !== undefined && future.net_profit_current_fr !== null
-                    ? future.net_profit_current_fr.toFixed(3) + '%'
+                    ? future.net_profit_current_fr.toFixed(2) + '%'
                     : 'N/A';
                 
                 // Чистая прибыль (стандартный FR): суммарный стандартный FR до экспирации - Спред % - Комиссии
                 const netProfitStandardFR = future.net_profit_standard_fr !== undefined && future.net_profit_standard_fr !== null
-                    ? future.net_profit_standard_fr.toFixed(3) + '%'
+                    ? future.net_profit_standard_fr.toFixed(2) + '%'
                     : 'N/A';
                 
                 // Цвет для спреда
@@ -1864,7 +1864,7 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
                         <td>${trade.name}</td>
                         <td>${trade.instrument}</td>
                         <td>Maker (лимитный)</td>
-                        <td class="fee-value">${trade.fee.toFixed(3)}%</td>
+                        <td class="fee-value">${trade.fee.toFixed(2)}%</td>
                         <td>VIP2</td>
                     </tr>
                 `;
@@ -1874,8 +1874,8 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
                         <tr class="fee-total">
                             <td colspan="2"><strong>ИТОГО комиссий:</strong></td>
                             <td></td>
-                            <td class="fee-value" style="font-weight: 500;"><strong>${totalFee.toFixed(3)}%</strong></td>
-                            <td>4 сделки × ${VIP2_MAKER_FEE.toFixed(3)}%</td>
+                            <td class="fee-value" style="font-weight: 500;"><strong>${totalFee.toFixed(2)}%</strong></td>
+                            <td>4 сделки × ${VIP2_MAKER_FEE.toFixed(2)}%</td>
                         </tr>
                     </tbody>
                 </table>
@@ -1935,7 +1935,7 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
                 // Обновляем безрисковую ставку
                 if (data.risk_free_rate_annual !== undefined) {
                     document.getElementById('risk-free-rate').textContent = 
-                        data.risk_free_rate_annual.toFixed(3);
+                        data.risk_free_rate_annual.toFixed(2);
                 }
                 
                 // Обновляем время последнего обновления
@@ -2018,7 +2018,7 @@ def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol
                         // Обновляем безрисковую ставку
                         if (message.data.risk_free_rate_annual !== undefined) {
                             document.getElementById('risk-free-rate').textContent = 
-                                message.data.risk_free_rate_annual.toFixed(3);
+                                message.data.risk_free_rate_annual.toFixed(2);
                         }
                         
                         // Отображаем таблицу комиссий
