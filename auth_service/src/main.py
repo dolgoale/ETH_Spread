@@ -153,10 +153,11 @@ async def logout(request: Request):
 
 @app.get("/auth/check")
 async def check(request: Request):
-    """Проверить статус авторизации"""
+    """Проверить статус авторизации (используется Nginx auth_request)"""
     session_data = await check_auth(request)
     
     if session_data:
+        # Пользователь авторизован - возвращаем 200
         return JSONResponse({
             "authenticated": True,
             "user": {
@@ -166,9 +167,12 @@ async def check(request: Request):
             }
         })
     else:
-        return JSONResponse({
-            "authenticated": False
-        })
+        # Пользователь не авторизован - возвращаем 401 для Nginx auth_request
+        from fastapi import status
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"authenticated": False}
+        )
 
 
 @app.get("/auth/user")
