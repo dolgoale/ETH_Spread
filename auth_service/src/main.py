@@ -61,10 +61,12 @@ def get_session_from_cookie(request: Request) -> Optional[dict]:
 async def check_auth(request: Request) -> Optional[dict]:
     """Проверить авторизацию пользователя"""
     domain = get_domain_from_request(request)
+    logger.debug(f"Проверка авторизации для домена: {domain}")
+    logger.debug(f"Все cookies в запросе: {list(request.cookies.keys())}")
     session_data = get_session_from_cookie(request)
     
     if not session_data:
-        logger.debug(f"Сессия не найдена для домена {domain}")
+        logger.warning(f"Сессия не найдена для домена {domain}. Cookies: {list(request.cookies.keys())}")
         return None
     
     # Проверяем, что сессия для правильного домена
