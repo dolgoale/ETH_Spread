@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Dict, Set
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
@@ -62,8 +62,19 @@ class WebServer:
         
         @self.app.get("/", response_class=HTMLResponse)
         async def index():
-            """Главная страница"""
-            return get_html_template()
+            """Главная страница со списком инструментов"""
+            from fastapi.responses import Response
+            html = get_main_page_html_template()
+            response = Response(
+                content=html,
+                media_type="text/html",
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0"
+                }
+            )
+            return response
         
         @self.app.get("/api/data")
         async def get_data():
@@ -168,9 +179,9 @@ class WebServer:
                 self.instruments_clients.discard(websocket)
                 logger.info(f"WebSocket клиент удален. Осталось: {len(self.instruments_clients)}")
         
-        @self.app.get("/instruments", response_class=HTMLResponse)
-        async def instruments_page():
-            """Страница с данными по всем инструментам"""
+        @self.app.get("/ETH", response_class=HTMLResponse)
+        async def eth_page():
+            """Страница с данными по ETH"""
             from fastapi.responses import Response
             html = get_instruments_html_template()
             response = Response(
@@ -183,6 +194,13 @@ class WebServer:
                 }
             )
             return response
+        
+        # Оставляем старый маршрут /instruments для обратной совместимости (редирект на /ETH)
+        @self.app.get("/instruments", response_class=HTMLResponse)
+        async def instruments_redirect():
+            """Редирект со старой страницы /instruments на /ETH"""
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url="/ETH", status_code=301)
         
         @self.app.get("/api/instruments")
         async def get_instruments_endpoint():
@@ -1123,6 +1141,126 @@ def get_html_template() -> str:
             .then(data => updateUI(data))
             .catch(error => console.error('Ошибка загрузки данных:', error));
     </script>
+</body>
+</html>"""
+
+
+def get_main_page_html_template() -> str:
+    """Получить HTML шаблон для главной страницы со списком инструментов"""
+    return """<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BBSpreads - Мониторинг спредов</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+            padding: 20px;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .container {
+            max-width: 1200px;
+            width: 100%;
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 50px;
+            color: white;
+        }
+        
+        .header h1 {
+            font-size: 3em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+        }
+        
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+        
+        .instruments-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+        }
+        
+        .instrument-card {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+            text-align: center;
+            transition: transform 0.3s, box-shadow 0.3s;
+            cursor: pointer;
+            text-decoration: none;
+            color: inherit;
+            display: block;
+        }
+        
+        .instrument-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.3);
+        }
+        
+        .instrument-card h2 {
+            font-size: 2.5em;
+            margin-bottom: 15px;
+            color: #667eea;
+        }
+        
+        .instrument-card p {
+            color: #6b7280;
+            font-size: 1.1em;
+        }
+        
+        .instrument-emoji {
+            font-size: 4em;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 BBSpreads</h1>
+            <p>Мониторинг спредов между срочными и бессрочными фьючерсами на ByBit</p>
+        </div>
+        
+        <div class="instruments-grid">
+            <a href="/ETH" class="instrument-card">
+                <div class="instrument-emoji">Ξ</div>
+                <h2>ETH</h2>
+                <p>Ethereum</p>
+            </a>
+            
+            <a href="/BTC" class="instrument-card">
+                <div class="instrument-emoji">₿</div>
+                <h2>BTC</h2>
+                <p>Bitcoin</p>
+            </a>
+            
+            <a href="/SOL" class="instrument-card">
+                <div class="instrument-emoji">◎</div>
+                <h2>SOL</h2>
+                <p>Solana</p>
+            </a>
+        </div>
+    </div>
 </body>
 </html>"""
 
