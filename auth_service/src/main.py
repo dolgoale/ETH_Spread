@@ -205,12 +205,23 @@ async def callback(request: Request, code: Optional[str] = None, state: Optional
             cookie_domain = f".{'.'.join(parts[-2:])}"  # .aadolgov.com
             logger.debug(f"Устанавливаем cookie domain: {cookie_domain}")
     
+    # Устанавливаем cookie с правильными параметрами для работы через редиректы
+    # SameSite=None требует Secure=True для работы в современных браузерах
+    cookie_samesite = settings.session_cookie_samesite
+    cookie_secure = settings.session_cookie_secure
+    
+    # Если SameSite=None, обязательно Secure=True
+    if cookie_samesite.lower() == 'none':
+        cookie_secure = True
+    
+    logger.debug(f"Устанавливаем cookie с параметрами: domain={cookie_domain}, secure={cookie_secure}, samesite={cookie_samesite}, httponly={settings.session_cookie_httponly}")
+    
     response.set_cookie(
         key=settings.session_cookie_name,
         value=session_token,
         httponly=settings.session_cookie_httponly,
-        secure=settings.session_cookie_secure,
-        samesite=settings.session_cookie_samesite,
+        secure=cookie_secure,
+        samesite=cookie_samesite,
         max_age=settings.session_expire_hours * 3600,
         path="/",
         domain=cookie_domain  # Устанавливаем domain для работы на всех поддоменах
