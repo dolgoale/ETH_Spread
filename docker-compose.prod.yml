@@ -21,8 +21,6 @@ services:
       - ./logs:/app/logs
       # Динамическая конфигурация (для сохранения изменений из веб-интерфейса)
       - ./config.json:/app/config.json
-      # Файл логов
-      - ./eth_spread_monitor.log:/app/eth_spread_monitor.log
     
     # Переопределение команды запуска
     command: python main.py
