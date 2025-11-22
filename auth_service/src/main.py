@@ -165,17 +165,23 @@ async def callback(request: Request, code: Optional[str] = None, state: Optional
     
     # Логируем полученную информацию для отладки
     logger.info(f"Авторизация пользователя: yandex_id={yandex_id}, login={login}, email={email}, name={name}, domain={domain}")
+    logger.info(f"ШАГ 1: Получение информации о пользователе завершено")
+    
     try:
         domain_users = db.get_domain_users(domain)
         logger.info(f"Доступные пользователи для {domain}: {domain_users}")
+        logger.info(f"ШАГ 2: Получение списка пользователей домена завершено")
     except Exception as e:
-        logger.error(f"Ошибка получения пользователей домена {domain}: {e}")
+        logger.error(f"Ошибка получения пользователей домена {domain}: {e}", exc_info=True)
         domain_users = []
+        logger.info(f"ШАГ 2: Ошибка получения списка пользователей, domain_users={domain_users}")
+    
+    logger.info(f"ШАГ 3: Переходим к проверке доступа")
     
     # Проверяем доступ пользователя к домену (по ID или по login)
     # Используем login если он указан в базе, иначе yandex_id
     user_identifier = login if login else yandex_id
-    logger.info(f"Начинаем проверку доступа: yandex_id={yandex_id}, login={login}, domain={domain}")
+    logger.info(f"ШАГ 4: user_identifier={user_identifier}, Начинаем проверку доступа: yandex_id={yandex_id}, login={login}, domain={domain}")
     try:
         logger.info(f"Вызываем db.is_user_allowed({domain}, {yandex_id})")
         result1 = db.is_user_allowed(domain, yandex_id)
