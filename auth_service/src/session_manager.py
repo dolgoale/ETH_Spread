@@ -21,13 +21,14 @@ class SessionManager:
         self.cookie_name = settings.session_cookie_name
         self.expire_hours = settings.session_expire_hours
     
-    def create_session(self, yandex_id: str, email: str, name: str, domain: str) -> str:
+    def create_session(self, yandex_id: str, email: str, name: str, domain: str, login: str = "") -> str:
         """Создать сессию для пользователя"""
         session_data = {
             "yandex_id": yandex_id,
             "email": email,
             "name": name,
             "domain": domain,
+            "login": login,  # Сохраняем login для проверки доступа
             "created_at": datetime.now().isoformat(),
             "expires_at": (datetime.now() + timedelta(hours=self.expire_hours)).isoformat()
         }
