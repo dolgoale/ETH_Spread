@@ -42,10 +42,17 @@ def get_domain_from_request(request: Request) -> str:
 def get_session_from_cookie(request: Request) -> Optional[dict]:
     """Получить сессию из cookie"""
     session_token = request.cookies.get(settings.session_cookie_name)
+    logger.debug(f"Получен токен сессии из cookie: {session_token[:20] if session_token else None}...")
     if not session_token:
+        logger.debug(f"Cookie {settings.session_cookie_name} не найден. Все cookies: {list(request.cookies.keys())}")
         return None
     
-    return session_manager.verify_session(session_token)
+    session_data = session_manager.verify_session(session_token)
+    if session_data:
+        logger.debug(f"Сессия успешно декодирована: domain={session_data.get('domain')}, yandex_id={session_data.get('yandex_id')}, login={session_data.get('login')}")
+    else:
+        logger.debug("Сессия не прошла проверку")
+    return session_data
 
 
 async def check_auth(request: Request) -> Optional[dict]:
@@ -122,6 +129,7 @@ async def callback(request: Request, code: Optional[str] = None, state: Optional
     # Получаем домен из state
     domain = urllib.parse.unquote(state) if state else get_domain_from_request(request)
     logger.info(f"Обработка callback для домена: {domain}")
+    logger.debug(f"Cookies в запросе: {request.cookies}")
     
     # Получаем токен
     token_data = await yandex_oauth.get_token(code)
@@ -173,6 +181,7 @@ async def callback(request: Request, code: Optional[str] = None, state: Optional
     response = RedirectResponse(url=redirect_url)
     
     # Устанавливаем cookie
+    logger.info(f"Устанавливаем cookie {settings.session_cookie_name} для домена {domain}, redirect_url={redirect_url}")
     response.set_cookie(
         key=settings.session_cookie_name,
         value=session_token,
@@ -180,9 +189,11 @@ async def callback(request: Request, code: Optional[str] = None, state: Optional
         secure=settings.session_cookie_secure,
         samesite=settings.session_cookie_samesite,
         max_age=settings.session_expire_hours * 3600,
-        path="/"
+        path="/",
+        domain=None  # Не указываем domain, чтобы cookie работал для всех поддоменов
     )
     
+    logger.info(f"Cookie установлен, перенаправляем на {redirect_url}")
     return response
 
 
