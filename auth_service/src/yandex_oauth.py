@@ -70,7 +70,12 @@ class YandexOAuth:
                 if response.status_code == 200:
                     user_info = response.json()
                     # Yandex возвращает id как строку, но может быть и числом
-                    user_info["yandex_id"] = str(user_info.get("id", ""))
+                    # Также проверяем login (имя пользователя) как альтернативу
+                    yandex_id = str(user_info.get("id", ""))
+                    login = user_info.get("login", "")
+                    user_info["yandex_id"] = yandex_id
+                    user_info["login"] = login
+                    logger.info(f"Получена информация от Yandex: id={yandex_id}, login={login}, email={user_info.get('default_email', '')}")
                     return user_info
                 else:
                     logger.error(f"Ошибка получения информации о пользователе: {response.status_code} - {response.text}")

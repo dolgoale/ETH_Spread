@@ -106,18 +106,31 @@ async def callback(request: Request, code: Optional[str] = None, state: Optional
         return HTMLResponse("<h1>Ошибка авторизации: не удалось получить информацию о пользователе</h1>", status_code=400)
     
     yandex_id = user_info.get("yandex_id", "")
+    login = user_info.get("login", "")
     email = user_info.get("default_email", "")
     name = user_info.get("real_name") or user_info.get("display_name", "")
     
-    # Проверяем доступ пользователя к домену
-    if not db.is_user_allowed(domain, yandex_id):
+    # Логируем полученную информацию для отладки
+    logger.info(f"Авторизация пользователя: yandex_id={yandex_id}, login={login}, email={email}, name={name}, domain={domain}")
+    logger.info(f"Доступные пользователи для {domain}: {db.get_domain_users(domain)}")
+    
+    # Проверяем доступ пользователя к домену (по ID или по login)
+    # Используем login если он указан в базе, иначе yandex_id
+    user_identifier = login if login else yandex_id
+    is_allowed = db.is_user_allowed(domain, yandex_id) or db.is_user_allowed(domain, login)
+    
+    if not is_allowed:
+        logger.warning(f"Доступ запрещен: yandex_id={yandex_id}, login={login} не найден в списке пользователей домена {domain}")
         return HTMLResponse(
-            f"<h1>Доступ запрещен</h1><p>У вас нет доступа к домену {domain}</p>",
+            f"<h1>Доступ запрещен</h1><p>У вас нет доступа к домену {domain}</p><p>Ваш Yandex ID: {yandex_id}</p><p>Ваш Login: {login}</p>",
             status_code=403
         )
     
-    # Создаем сессию
-    session_token = session_manager.create_session(yandex_id, email, name, domain)
+    # Используем login для сессии если он есть, иначе yandex_id
+    session_yandex_id = login if login else yandex_id
+    
+    # Создаем сессию (используем login если есть, иначе yandex_id)
+    session_token = session_manager.create_session(session_yandex_id, email, name, domain)
     
     # Перенаправляем на исходный домен с установкой cookie
     redirect_url = f"https://{domain}/"
