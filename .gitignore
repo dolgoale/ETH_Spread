@@ -32,3 +32,5 @@ dist/
 build/
 *.egg-info/
 
+# Конфигурация (динамически изменяемая)
+config.json
