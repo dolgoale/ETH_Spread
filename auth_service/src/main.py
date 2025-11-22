@@ -90,7 +90,11 @@ async def login(request: Request):
     state = urllib.parse.quote(domain)
     
     authorize_url = yandex_oauth.get_authorize_url(state=state)
-    return RedirectResponse(url=authorize_url)
+    logger.info(f"Редирект на авторизацию Yandex для домена {domain}: {authorize_url}")
+    
+    # Используем status_code=302 для явного редиректа
+    response = RedirectResponse(url=authorize_url, status_code=302)
+    return response
 
 
 @app.get("/auth/callback")
