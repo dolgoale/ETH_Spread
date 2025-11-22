@@ -85,7 +85,9 @@ class UserDatabase:
     def is_user_allowed(self, domain: str, yandex_id: str) -> bool:
         """Проверить, разрешен ли доступ пользователя к домену"""
         users = self.get_domain_users(domain)
-        return yandex_id in users
+        # Проверяем точное совпадение (регистронезависимо)
+        yandex_id_lower = yandex_id.lower() if yandex_id else ""
+        return any(user.lower() == yandex_id_lower for user in users)
     
     def add_user_to_domain(self, domain: str, yandex_id: str) -> bool:
         """Добавить пользователя к домену"""
