@@ -175,11 +175,20 @@ async def callback(request: Request, code: Optional[str] = None, state: Optional
     # Проверяем доступ пользователя к домену (по ID или по login)
     # Используем login если он указан в базе, иначе yandex_id
     user_identifier = login if login else yandex_id
+    logger.info(f"Начинаем проверку доступа: yandex_id={yandex_id}, login={login}, domain={domain}")
     try:
-        is_allowed = db.is_user_allowed(domain, yandex_id) or db.is_user_allowed(domain, login)
-        logger.info(f"Проверка доступа: yandex_id={yandex_id}, login={login}, is_allowed={is_allowed}")
+        logger.info(f"Вызываем db.is_user_allowed({domain}, {yandex_id})")
+        result1 = db.is_user_allowed(domain, yandex_id)
+        logger.info(f"Результат db.is_user_allowed({domain}, {yandex_id}) = {result1}")
+        
+        logger.info(f"Вызываем db.is_user_allowed({domain}, {login})")
+        result2 = db.is_user_allowed(domain, login)
+        logger.info(f"Результат db.is_user_allowed({domain}, {login}) = {result2}")
+        
+        is_allowed = result1 or result2
+        logger.info(f"Проверка доступа завершена: yandex_id={yandex_id}, login={login}, is_allowed={is_allowed}")
     except Exception as e:
-        logger.error(f"Ошибка проверки доступа для домена {domain}: {e}")
+        logger.error(f"Ошибка проверки доступа для домена {domain}: {e}", exc_info=True)
         is_allowed = False
     
     if not is_allowed:
