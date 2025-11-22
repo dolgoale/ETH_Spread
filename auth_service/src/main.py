@@ -82,10 +82,12 @@ async def check_auth(request: Request) -> Optional[dict]:
     # Проверяем доступ (поддерживаем и ID и login)
     is_allowed = db.is_user_allowed(domain, yandex_id) or (login and db.is_user_allowed(domain, login))
     if not is_allowed:
+        user_identifier = login if login else yandex_id
         logger.debug(f"Пользователь {user_identifier} не имеет доступа к домену {domain}")
         logger.debug(f"Доступные пользователи для {domain}: {db.get_domain_users(domain)}")
         return None
     
+    user_identifier = login if login else yandex_id
     logger.debug(f"Пользователь {user_identifier} авторизован для домена {domain}")
     return session_data
 
