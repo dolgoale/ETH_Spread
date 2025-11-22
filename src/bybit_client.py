@@ -263,29 +263,99 @@ class ByBitClient:
         try:
             # ByBit API возвращает до 200 записей за раз
             # Funding Rate обновляется каждые 8 часов, поэтому за 7 дней будет около 21 записи
-            limit = min(days * 3, 200)
+            max_records_per_request = 200
+            records_per_day = 3  # 3 выплаты в день
             
             end_time = int(datetime.now().timestamp() * 1000)
             start_time = int((datetime.now() - timedelta(days=days)).timestamp() * 1000)
             
-            response = self.client.get_funding_rate_history(
-                category="linear",
-                symbol=symbol,
-                startTime=start_time,
-                endTime=end_time,
-                limit=limit
-            )
+            # Если нужно больше 200 записей, делаем несколько запросов
+            expected_records = days * records_per_day
+            all_history = []
             
-            if response.get("retCode") == 0:
-                history = response.get("result", {}).get("list", [])
-                return [
-                    {
-                        "symbol": item.get("symbol"),
-                        "funding_rate": float(item.get("fundingRate", 0)),
-                        "timestamp": int(item.get("fundingRateTimestamp", 0))
-                    }
-                    for item in history
-                ]
+            if expected_records <= max_records_per_request:
+                # Один запрос достаточно
+                limit = expected_records
+                response = self.client.get_funding_rate_history(
+                    category="linear",
+                    symbol=symbol,
+                    startTime=start_time,
+                    endTime=end_time,
+                    limit=limit
+                )
+                
+                if response.get("retCode") == 0:
+                    history = response.get("result", {}).get("list", [])
+                    all_history = [
+                        {
+                            "symbol": item.get("symbol"),
+                            "funding_rate": float(item.get("fundingRate", 0)),
+                            "timestamp": int(item.get("fundingRateTimestamp", 0))
+                        }
+                        for item in history
+                    ]
+            else:
+                # Нужно несколько запросов для получения полной истории
+                # Делаем запросы по частям, начиная с самых старых данных
+                current_end_time = end_time
+                days_processed = 0
+                
+                while days_processed < days:
+                    # Рассчитываем период для текущего запроса
+                    days_in_request = min(max_records_per_request // records_per_day, days - days_processed)
+                    current_start_time = int((datetime.fromtimestamp(current_end_time / 1000) - timedelta(days=days_in_request)).timestamp() * 1000)
+                    
+                    response = self.client.get_funding_rate_history(
+                        category="linear",
+                        symbol=symbol,
+                        startTime=current_start_time,
+                        endTime=current_end_time,
+                        limit=max_records_per_request
+                    )
+                    
+                    if response.get("retCode") == 0:
+                        history = response.get("result", {}).get("list", [])
+                        batch = [
+                            {
+                                "symbol": item.get("symbol"),
+                                "funding_rate": float(item.get("fundingRate", 0)),
+                                "timestamp": int(item.get("fundingRateTimestamp", 0))
+                            }
+                            for item in history
+                        ]
+                        
+                        # Добавляем к общей истории (вставляем в начало, так как старые данные)
+                        all_history = batch + all_history
+                        
+                        # Обновляем время для следующего запроса
+                        if history:
+                            # Берем самое старое время из полученных данных
+                            oldest_timestamp = min(item["timestamp"] for item in batch)
+                            current_end_time = oldest_timestamp - 1  # -1 чтобы не дублировать последнюю запись
+                        else:
+                            break
+                        
+                        days_processed += days_in_request
+                    else:
+                        logger.warning(f"Ошибка при получении истории Funding Rate: {response.get('retMsg', 'Unknown error')}")
+                        break
+                    
+                    # Небольшая задержка между запросами, чтобы не перегружать API
+                    time.sleep(0.1)
+                
+                # Сортируем по времени (от старых к новым) и удаляем дубликаты
+                all_history.sort(key=lambda x: x["timestamp"])
+                seen = set()
+                unique_history = []
+                for item in all_history:
+                    key = item["timestamp"]
+                    if key not in seen:
+                        seen.add(key)
+                        unique_history.append(item)
+                all_history = unique_history
+            
+            return all_history
+            
         except Exception as e:
             logger.error(f"Ошибка при получении истории Funding Rate для {symbol}: {e}")
         
@@ -313,6 +383,29 @@ class ByBitClient:
         
         rates = [item["funding_rate"] for item in history]
         return sum(rates) / len(rates) if rates else None
+    
+    def calculate_total_funding_rate(
+        self, 
+        symbol: str, 
+        days: int = 7
+    ) -> Optional[float]:
+        """
+        Рассчитать суммарный Funding Rate за период
+        
+        Args:
+            symbol: Символ инструмента
+            days: Количество дней для расчета
+            
+        Returns:
+            Суммарный Funding Rate за период или None при ошибке
+        """
+        history = self.get_funding_rate_history(symbol, days)
+        
+        if not history:
+            return None
+        
+        rates = [item["funding_rate"] for item in history]
+        return sum(rates) if rates else None
     
     def get_available_futures(self, base_symbol: str = "ETHUSDT") -> List[Dict]:
         """

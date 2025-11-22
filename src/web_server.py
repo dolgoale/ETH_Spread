@@ -4,7 +4,7 @@
 import asyncio
 import json
 import logging
-from typing import Dict, Set
+from typing import Dict, Set, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -183,7 +183,39 @@ class WebServer:
         async def eth_page():
             """Страница с данными по ETH"""
             from fastapi.responses import Response
-            html = get_instruments_html_template()
+            html = get_instruments_html_template("ETH", "ETHUSDT", "Ethereum")
+            response = Response(
+                content=html,
+                media_type="text/html",
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0"
+                }
+            )
+            return response
+        
+        @self.app.get("/BTC", response_class=HTMLResponse)
+        async def btc_page():
+            """Страница с данными по BTC"""
+            from fastapi.responses import Response
+            html = get_instruments_html_template("BTC", "BTCUSDT", "Bitcoin")
+            response = Response(
+                content=html,
+                media_type="text/html",
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0"
+                }
+            )
+            return response
+        
+        @self.app.get("/SOL", response_class=HTMLResponse)
+        async def sol_page():
+            """Страница с данными по SOL"""
+            from fastapi.responses import Response
+            html = get_instruments_html_template("SOL", "SOLUSDT", "Solana")
             response = Response(
                 content=html,
                 media_type="text/html",
@@ -210,9 +242,34 @@ class WebServer:
             except Exception as e:
                 logger.error(f"Ошибка при получении данных по инструментам: {e}", exc_info=True)
                 return {"error": str(e)}
+        
+        @self.app.get("/api/instruments/{instrument}")
+        async def get_instrument_data_endpoint(instrument: str):
+            """API endpoint для получения данных по конкретному инструменту (ETH, BTC, SOL)"""
+            try:
+                # Маппинг символов инструментов
+                instrument_map = {
+                    "ETH": "ETHUSDT",
+                    "BTC": "BTCUSDT",
+                    "SOL": "SOLUSDT"
+                }
+                
+                if instrument.upper() not in instrument_map:
+                    return {"error": f"Неизвестный инструмент: {instrument}"}
+                
+                perpetual_symbol = instrument_map[instrument.upper()]
+                return await self._get_instruments_data(perpetual_symbol=perpetual_symbol)
+            except Exception as e:
+                logger.error(f"Ошибка при получении данных по инструменту {instrument}: {e}", exc_info=True)
+                return {"error": str(e)}
     
-    async def _get_instruments_data(self):
-        """Метод для получения данных по всем инструментам"""
+    async def _get_instruments_data(self, perpetual_symbol: Optional[str] = None):
+        """Метод для получения данных по всем инструментам
+        
+        Args:
+            perpetual_symbol: Символ бессрочного фьючерса (например, ETHUSDT, BTCUSDT, SOLUSDT).
+                              Если не указан, используется из конфигурации.
+        """
         import concurrent.futures
         from datetime import datetime
         from .spread_calculator import SpreadCalculator
@@ -224,7 +281,9 @@ class WebServer:
         bybit_client = self.monitor.bybit_client
         current_config = self.monitor._get_config()
         
-        perpetual_symbol = current_config.get("perpetual_symbol", self.monitor.perpetual_symbol)
+        # Используем переданный символ или берем из конфигурации
+        if perpetual_symbol is None:
+            perpetual_symbol = current_config.get("perpetual_symbol", self.monitor.perpetual_symbol)
         
         # Получаем ВСЕ доступные срочные фьючерсы для базового символа
         loop = asyncio.get_event_loop()
@@ -247,25 +306,43 @@ class WebServer:
             perpetual_symbol
         )
         
-        # Получаем усредненный Funding Rate за последний месяц (30 дней)
+        # Получаем текущий Funding Rate в моменте
+        current_funding_rate_data = await loop.run_in_executor(
+            executor,
+            bybit_client.get_current_funding_rate,
+            perpetual_symbol
+        )
+        current_funding_rate = current_funding_rate_data.get("funding_rate", 0) if current_funding_rate_data else 0
+        
+        # Получаем средний FR за 3 месяца (90 дней)
+        average_fr_3months = await loop.run_in_executor(
+            executor,
+            bybit_client.calculate_average_funding_rate,
+            perpetual_symbol,
+            90  # 90 дней (3 месяца)
+        )
+        if average_fr_3months is None:
+            average_fr_3months = current_funding_rate if current_funding_rate else 0
+        
+        # Получаем средний FR за 6 месяцев (180 дней)
+        average_fr_6months = await loop.run_in_executor(
+            executor,
+            bybit_client.calculate_average_funding_rate,
+            perpetual_symbol,
+            180  # 180 дней (6 месяцев)
+        )
+        if average_fr_6months is None:
+            average_fr_6months = current_funding_rate if current_funding_rate else 0
+        
+        # Получаем усредненный Funding Rate за последний месяц (30 дней) для расчетов срочных фьючерсов
         average_funding_rate = await loop.run_in_executor(
             executor,
             bybit_client.calculate_average_funding_rate,
             perpetual_symbol,
             30  # 30 дней (месяц)
         )
-        
-        # Если не удалось получить средний FR, пытаемся получить текущий
         if average_funding_rate is None:
-            funding_rate_data = await loop.run_in_executor(
-                executor,
-                bybit_client.get_current_funding_rate,
-                perpetual_symbol
-            )
-            average_funding_rate = funding_rate_data.get("funding_rate", 0) if funding_rate_data else 0
-        
-        # Используем средний FR для всех расчетов
-        current_funding_rate = average_funding_rate if average_funding_rate is not None else 0
+            average_funding_rate = current_funding_rate if current_funding_rate else 0
         
         # Получаем spot цену ETH
         spot_ticker = await loop.run_in_executor(
@@ -346,8 +423,8 @@ class WebServer:
                     spread_data = spreads_dict[symbol]
                     future_info["spread_percent"] = spread_data.spread_percent
                     
-                    # Рассчитываем Funding Rate до экспирации на основе среднего FR за месяц
-                    if future_info.get("days_until_expiration") and current_funding_rate:
+                    # Рассчитываем Funding Rate до экспирации на основе среднего FR за количество дней до экспирации
+                    if future_info.get("days_until_expiration"):
                         days_until_exp = future_info["days_until_expiration"]
                         
                         # Получаем mark_price срочного фьючерса
@@ -371,15 +448,62 @@ class WebServer:
                         fair_spread_percent = ((fair_futures_price - perpetual_mark_price) / perpetual_mark_price * 100) if perpetual_mark_price > 0 else None
                         future_info["fair_spread_percent"] = fair_spread_percent
                         
-                        # FR до экспирации = средний FR за месяц × (дни × 3 выплаты в день) × 100 (в процентах)
-                        funding_rate_until_exp = current_funding_rate * days_until_exp * 3 * 100
-                        future_info["funding_rate_until_expiration"] = funding_rate_until_exp
+                        # Получаем суммарный FR за количество дней, равное дням до экспирации
+                        # Используем полную историю за нужный период (метод поддерживает множественные запросы)
+                        days_for_fr = int(days_until_exp) if days_until_exp > 0 else 30
+                        # Ограничиваем максимальное количество дней (365 - максимум доступной истории)
+                        days_for_fr = min(days_for_fr, 365)
                         
-                        # Стандартный FR до экспирации
-                        standard_fr_until_exp = STANDARD_FUNDING_RATE * days_until_exp * 3 * 100
+                        # Получаем полную историю FR за период, равный дням до экспирации
+                        history = await loop.run_in_executor(
+                            executor,
+                            bybit_client.get_funding_rate_history,
+                            perpetual_symbol,
+                            days_for_fr
+                        )
+                        
+                        if history:
+                            # Суммируем все FR из истории - это суммарный FR за период истории
+                            rates = [item["funding_rate"] for item in history]
+                            total_fr_for_days = sum(rates) if rates else 0
+                            
+                            # Количество выплат в истории (может быть меньше, если история неполная)
+                            actual_payments_in_history = len(history)
+                            expected_payments_in_history = days_for_fr * 3
+                            
+                            # Если получили полную историю, используем сумму напрямую
+                            # Если период до экспирации отличается от периода истории, масштабируем
+                            if actual_payments_in_history >= expected_payments_in_history * 0.95:  # 95% порог для учета возможных пропусков
+                                # История почти полная - используем средний FR за выплату и масштабируем на период до экспирации
+                                avg_fr_per_payment = total_fr_for_days / actual_payments_in_history if actual_payments_in_history > 0 else 0
+                                payments_until_exp = days_until_exp * 3
+                                funding_rate_until_exp = avg_fr_per_payment * payments_until_exp * 100
+                            else:
+                                # История неполная - масштабируем имеющийся суммарный FR
+                                avg_fr_per_payment = total_fr_for_days / actual_payments_in_history if actual_payments_in_history > 0 else 0
+                                payments_until_exp = days_until_exp * 3
+                                funding_rate_until_exp = avg_fr_per_payment * payments_until_exp * 100
+                        else:
+                            # Fallback: рассчитываем суммарный FR на основе текущего FR
+                            avg_fr_per_payment = current_funding_rate if current_funding_rate else 0
+                            payments_until_exp = days_until_exp * 3
+                            funding_rate_until_exp = avg_fr_per_payment * payments_until_exp * 100
+                            total_fr_for_days = current_funding_rate * days_for_fr * 3
+                        
+                        future_info["funding_rate_until_expiration"] = funding_rate_until_exp
+                        future_info["average_fr_days_used"] = days_for_fr  # Сохраняем количество дней, за которое рассчитан FR
+                        
+                        # Стандартный FR до экспирации (суммарный)
+                        # Стандартный FR = 0.0001 (0.01%) за каждую выплату (8 часов)
+                        # Количество выплат до экспирации (уже рассчитано выше)
+                        # payments_until_exp = days_until_exp * 3
+                        
+                        # Суммарный стандартный FR до экспирации = стандартный FR × количество выплат
+                        standard_fr_until_exp = STANDARD_FUNDING_RATE * payments_until_exp * 100
+                        
                         future_info["standard_funding_rate_until_expiration"] = standard_fr_until_exp
                         
-                        # Чистая прибыль (средний FR за месяц) = FR до экспирации - Спред % - Комиссии
+                        # Чистая прибыль (суммарный FR за кол-во дней до экспирации) = FR до экспирации - Спред % - Комиссии
                         net_profit_current_fr = funding_rate_until_exp - spread_data.spread_percent - TOTAL_TRADING_FEES
                         future_info["net_profit_current_fr"] = net_profit_current_fr
                         
@@ -408,9 +532,9 @@ class WebServer:
                 "last_price": perpetual_ticker.get("last_price", 0),
                 "timestamp": perpetual_ticker.get("timestamp", 0),
                 "spot_price": spot_price,  # Spot цена ETH
-                "current_funding_rate": current_funding_rate * 100 if current_funding_rate else 0,  # Средний FR за месяц (в процентах за 8-часовой период)
-                "current_funding_rate_annualized": (current_funding_rate * 365 * 3 * 100) if current_funding_rate else 0,  # Annualized в процентах
-                "average_funding_rate_month": current_funding_rate * 100 if current_funding_rate else 0  # Средний FR за месяц (для отображения)
+                "current_funding_rate": current_funding_rate * 100 if current_funding_rate else 0,  # Текущий FR в моменте (в процентах за 8-часовой период)
+                "average_funding_rate_3months": average_fr_3months * 100 if average_fr_3months else 0,  # Средний FR за 3 месяца (в процентах за 8-часовой период)
+                "average_funding_rate_6months": average_fr_6months * 100 if average_fr_6months else 0  # Средний FR за 6 месяцев (в процентах за 8-часовой период)
             }
         
         return {
@@ -976,9 +1100,9 @@ def get_html_template() -> str:
             if (data.funding_rate) {
                 const fr = data.funding_rate;
                 document.getElementById('current-fr').textContent = 
-                    (fr.current_rate * 100).toFixed(4) + '%';
+                    (fr.current_rate * 100).toFixed(3) + '%';
                 document.getElementById('avg-fr').textContent = 
-                    (fr.average_rate * 100).toFixed(4) + '%';
+                    (fr.average_rate * 100).toFixed(3) + '%';
             }
             
             // Обновляем спреды
@@ -990,7 +1114,7 @@ def get_html_template() -> str:
                     const spreadItem = document.createElement('div');
                     spreadItem.className = 'spread-item';
                     
-                    const spreadPercent = spread.spread_percent.toFixed(4);
+                    const spreadPercent = spread.spread_percent.toFixed(3);
                     const isNegative = spread.spread_percent < 0;
                     
                     spreadItem.innerHTML = `
@@ -1265,14 +1389,22 @@ def get_main_page_html_template() -> str:
 </html>"""
 
 
-def get_instruments_html_template() -> str:
-    """Получить HTML шаблон для отображения всех инструментов"""
-    return """<!DOCTYPE html>
+def get_instruments_html_template(instrument_code: str = "ETH", perpetual_symbol: str = "ETHUSDT", instrument_name: str = "Ethereum") -> str:
+    """Получить HTML шаблон для отображения инструмента
+    
+    Args:
+        instrument_code: Код инструмента (ETH, BTC, SOL)
+        perpetual_symbol: Символ бессрочного фьючерса (ETHUSDT, BTCUSDT, SOLUSDT)
+        instrument_name: Название инструмента (Ethereum, Bitcoin, Solana)
+    """
+    # Используем обычную строку с .format() для избежания проблем с фигурными скобками в JavaScript
+    # Все фигурные скобки в JavaScript должны быть удвоены {{ и }}
+    template = """<!DOCTYPE html>
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Инструменты - ETH Spread Monitor</title>
+    <title>{instrument_code} Spread Monitor - {instrument_name}</title>
     <style>
         * {
             margin: 0;
@@ -1459,8 +1591,8 @@ def get_instruments_html_template() -> str:
 <body>
     <div class="container">
         <div class="header">
-            <h1>📊 Инструменты ETH</h1>
-            <p>Данные по всем отслеживаемым инструментам</p>
+            <h1>📊 {instrument_code} Spread Monitor - {instrument_name}</h1>
+            <p>Данные по инструменту {instrument_name} ({perpetual_symbol})</p>
             <div style="margin-top: 8px; font-size: 0.9em; color: #6b7280;">
                 <span>Безрисковая ставка: <strong id="risk-free-rate">4.00</strong>% годовых</span>
             </div>
@@ -1532,12 +1664,16 @@ def get_instruments_html_template() -> str:
                 return;
             }
             
-            const fundingRate = perpetual.current_funding_rate !== undefined 
-                ? perpetual.current_funding_rate.toFixed(4) + '% (средний за месяц)'
+            const currentFR = perpetual.current_funding_rate !== undefined 
+                ? perpetual.current_funding_rate.toFixed(3) + '%'
                 : 'N/A';
             
-            const fundingRateAnnualized = perpetual.current_funding_rate_annualized !== undefined 
-                ? perpetual.current_funding_rate_annualized.toFixed(2) + '% (средний за месяц)'
+            const avgFR3months = perpetual.average_funding_rate_3months !== undefined 
+                ? perpetual.average_funding_rate_3months.toFixed(3) + '%'
+                : 'N/A';
+            
+            const avgFR6months = perpetual.average_funding_rate_6months !== undefined 
+                ? perpetual.average_funding_rate_6months.toFixed(3) + '%'
                 : 'N/A';
             
             const spotPrice = perpetual.spot_price !== undefined && perpetual.spot_price !== null
@@ -1552,8 +1688,9 @@ def get_instruments_html_template() -> str:
                             <th>Spot Price</th>
                             <th>Mark Price</th>
                             <th>Last Price</th>
-                            <th>Funding Rate (8ч, средний за месяц)</th>
-                            <th>Funding Rate (annualized, средний за месяц)</th>
+                            <th>FR текущий (8ч)</th>
+                            <th>FR средний за 3 мес. (8ч)</th>
+                            <th>FR средний за 6 мес. (8ч)</th>
                             <th>Время обновления</th>
                         </tr>
                     </thead>
@@ -1563,8 +1700,9 @@ def get_instruments_html_template() -> str:
                             <td class="price" style="color: #10b981; font-weight: 500;">${spotPrice}</td>
                             <td class="price mark">${formatPrice(perpetual.mark_price)}</td>
                             <td class="price last">${formatPrice(perpetual.last_price)}</td>
-                            <td class="price" style="color: #3b82f6;">${fundingRate}</td>
-                            <td class="price" style="color: #8b5cf6;">${fundingRateAnnualized}</td>
+                            <td class="price" style="color: #3b82f6;">${currentFR}</td>
+                            <td class="price" style="color: #8b5cf6;">${avgFR3months}</td>
+                            <td class="price" style="color: #f59e0b;">${avgFR6months}</td>
                             <td class="timestamp">${formatTimestamp(perpetual.timestamp)}</td>
                         </tr>
                     </tbody>
@@ -1591,9 +1729,9 @@ def get_instruments_html_template() -> str:
                             <th>Last Price</th>
                             <th>Спред %</th>
                             <th>Справедливый спред %</th>
-                            <th>FR до экспирации (средний за месяц)</th>
-                            <th>FR до экспирации (стандартный)</th>
-                            <th>Чистая прибыль (средний FR за месяц)</th>
+                            <th>Суммарный FR за кол-во дней до экспирации</th>
+                            <th>Суммарный FR (стандартный) за кол-во дней до экспирации</th>
+                            <th>Чистая прибыль (суммарный FR за кол-во дней до экспирации)</th>
                             <th>Чистая прибыль (стандартный FR)</th>
                             <th>Время обновления</th>
                         </tr>
@@ -1612,32 +1750,32 @@ def get_instruments_html_template() -> str:
                     : 'N/A';
                 
                 const spreadPercent = future.spread_percent !== undefined && future.spread_percent !== null
-                    ? future.spread_percent.toFixed(4) + '%'
+                    ? future.spread_percent.toFixed(3) + '%'
                     : 'N/A';
                 
                 // Справедливый спред % = (fair_price - mark_price) / mark_price * 100
                 const fairSpreadPercent = future.fair_spread_percent !== undefined && future.fair_spread_percent !== null
-                    ? future.fair_spread_percent.toFixed(4) + '%'
+                    ? future.fair_spread_percent.toFixed(3) + '%'
                     : 'N/A';
                 
-                // Funding Rate до экспирации (на основе текущего FR)
+                // Суммарный FR за кол-во дней до экспирации (рассчитан на основе суммарного FR за количество дней, равное дням до экспирации)
                 const frUntilExpCurrent = future.funding_rate_until_expiration !== undefined && future.funding_rate_until_expiration !== null
-                    ? future.funding_rate_until_expiration.toFixed(4) + '%'
+                    ? future.funding_rate_until_expiration.toFixed(3) + '%'
                     : 'N/A';
                 
                 // Стандартный Funding Rate до экспирации (0.01% за 8 часов)
                 const standardFRUntilExp = future.standard_funding_rate_until_expiration !== undefined && future.standard_funding_rate_until_expiration !== null
-                    ? future.standard_funding_rate_until_expiration.toFixed(4) + '%'
+                    ? future.standard_funding_rate_until_expiration.toFixed(3) + '%'
                     : 'N/A';
                 
-                // Чистая прибыль (средний FR за месяц): FR до экспирации - Спред % - Комиссии
+                // Чистая прибыль (суммарный FR за кол-во дней до экспирации): FR до экспирации - Спред % - Комиссии
                 const netProfitCurrentFR = future.net_profit_current_fr !== undefined && future.net_profit_current_fr !== null
-                    ? future.net_profit_current_fr.toFixed(4) + '%'
+                    ? future.net_profit_current_fr.toFixed(3) + '%'
                     : 'N/A';
                 
-                // Чистая прибыль (стандартный FR): стандартный FR до экспирации - Спред % - Комиссии
+                // Чистая прибыль (стандартный FR): суммарный стандартный FR до экспирации - Спред % - Комиссии
                 const netProfitStandardFR = future.net_profit_standard_fr !== undefined && future.net_profit_standard_fr !== null
-                    ? future.net_profit_standard_fr.toFixed(4) + '%'
+                    ? future.net_profit_standard_fr.toFixed(3) + '%'
                     : 'N/A';
                 
                 // Цвет для спреда
@@ -1726,7 +1864,7 @@ def get_instruments_html_template() -> str:
                         <td>${trade.name}</td>
                         <td>${trade.instrument}</td>
                         <td>Maker (лимитный)</td>
-                        <td class="fee-value">${trade.fee.toFixed(4)}%</td>
+                        <td class="fee-value">${trade.fee.toFixed(3)}%</td>
                         <td>VIP2</td>
                     </tr>
                 `;
@@ -1736,13 +1874,13 @@ def get_instruments_html_template() -> str:
                         <tr class="fee-total">
                             <td colspan="2"><strong>ИТОГО комиссий:</strong></td>
                             <td></td>
-                            <td class="fee-value" style="font-weight: 500;"><strong>${totalFee.toFixed(4)}%</strong></td>
-                            <td>4 сделки × ${VIP2_MAKER_FEE.toFixed(4)}%</td>
+                            <td class="fee-value" style="font-weight: 500;"><strong>${totalFee.toFixed(3)}%</strong></td>
+                            <td>4 сделки × ${VIP2_MAKER_FEE.toFixed(3)}%</td>
                         </tr>
                     </tbody>
                 </table>
                 <div style="margin-top: 15px; padding: 10px; background: #f3f4f6; border-radius: 8px; font-size: 0.85em; color: #6b7280;">
-                    <strong>Примечание:</strong> Комиссии вычитаются из чистой прибыли в колонках "Чистая прибыль (средний FR за месяц)" и "Чистая прибыль (стандартный FR)". Все расчеты основаны на среднем Funding Rate за последний месяц (30 дней).
+                    <strong>Примечание:</strong> Комиссии вычитаются из чистой прибыли в колонках "Чистая прибыль (суммарный FR за кол-во дней до экспирации)" и "Чистая прибыль (стандартный FR)". Суммарный FR рассчитывается за количество дней, равное количеству дней до экспирации конкретного фьючерса.
                 </div>
             `;
             
@@ -1753,28 +1891,51 @@ def get_instruments_html_template() -> str:
             try {
                 updateStatus(false);
                 
-                const response = await fetch('/api/instruments');
+                // Используем API для конкретного инструмента
+                const instrumentCode = '{instrument_code}';
+                console.log('Загрузка данных для инструмента:', instrumentCode);
+                const response = await fetch('/api/instruments/' + instrumentCode);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
                 const data = await response.json();
+                console.log('Данные получены:', data);
                 
                 if (data.error) {
-                    document.getElementById('perpetual-container').innerHTML = 
-                        `<div class="error">Ошибка: ${data.error}</div>`;
-                    document.getElementById('futures-container').innerHTML = 
-                        `<div class="error">Ошибка: ${data.error}</div>`;
+                    console.error('Ошибка в данных:', data.error);
+                    const perpetualContainer = document.getElementById('perpetual-container');
+                    const futuresContainer = document.getElementById('futures-container');
+                    if (perpetualContainer) {
+                        perpetualContainer.innerHTML = `<div class="error">Ошибка: ${data.error}</div>`;
+                    }
+                    if (futuresContainer) {
+                        futuresContainer.innerHTML = `<div class="error">Ошибка: ${data.error}</div>`;
+                    }
                     return;
                 }
                 
                 updateStatus(true);
+                console.log('Отображение данных...');
                 
                 // Отображаем данные
-                displayPerpetual(data.perpetual);
-                displayFutures(data.futures);
+                if (data.perpetual) {
+                    displayPerpetual(data.perpetual);
+                } else {
+                    console.warn('Данные perpetual не найдены');
+                }
+                if (data.futures && Array.isArray(data.futures)) {
+                    displayFutures(data.futures);
+                } else {
+                    console.warn('Данные futures не найдены или не массив');
+                }
                 displayFees();
                 
                 // Обновляем безрисковую ставку
                 if (data.risk_free_rate_annual !== undefined) {
                     document.getElementById('risk-free-rate').textContent = 
-                        data.risk_free_rate_annual.toFixed(2);
+                        data.risk_free_rate_annual.toFixed(3);
                 }
                 
                 // Обновляем время последнего обновления
@@ -1785,16 +1946,30 @@ def get_instruments_html_template() -> str:
             } catch (error) {
                 console.error('Ошибка при загрузке данных:', error);
                 updateStatus(false);
+                const errorMsg = error.message || String(error);
                 document.getElementById('perpetual-container').innerHTML = 
-                    `<div class="error">Ошибка при загрузке данных: ${error.message}</div>`;
+                    `<div class="error">Ошибка при загрузке данных: ${errorMsg}</div>`;
+                document.getElementById('futures-container').innerHTML = 
+                    `<div class="error">Ошибка при загрузке данных: ${errorMsg}</div>`;
             }
         }
         
-        // Отображаем таблицу комиссий сразу
-        displayFees();
-        
-        // Загружаем начальные данные через HTTP
-        loadInstruments();
+        // Ждем полной загрузки DOM
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', function() {
+                console.log('DOM загружен, запускаем загрузку данных');
+                // Отображаем таблицу комиссий
+                displayFees();
+                // Загружаем начальные данные через HTTP
+                loadInstruments();
+            });
+        } else {
+            console.log('DOM уже загружен, запускаем загрузку данных');
+            // Отображаем таблицу комиссий сразу
+            displayFees();
+            // Загружаем начальные данные через HTTP
+            loadInstruments();
+        }
         
         // WebSocket для real-time обновлений
         let wsInstruments = null;
@@ -1843,7 +2018,7 @@ def get_instruments_html_template() -> str:
                         // Обновляем безрисковую ставку
                         if (message.data.risk_free_rate_annual !== undefined) {
                             document.getElementById('risk-free-rate').textContent = 
-                                message.data.risk_free_rate_annual.toFixed(2);
+                                message.data.risk_free_rate_annual.toFixed(3);
                         }
                         
                         // Отображаем таблицу комиссий
@@ -1898,4 +2073,7 @@ def get_instruments_html_template() -> str:
     </script>
 </body>
 </html>"""
+    
+    # Заменяем плейсхолдеры в шаблоне (используем replace вместо format, чтобы избежать проблем с фигурными скобками в CSS/JS)
+    return template.replace("{instrument_code}", instrument_code).replace("{perpetual_symbol}", perpetual_symbol).replace("{instrument_name}", instrument_name)
 
