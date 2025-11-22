@@ -82,9 +82,13 @@ async def check_auth(request: Request) -> Optional[dict]:
 
 
 @app.get("/auth/login")
-async def login(request: Request):
+async def login(request: Request, error: Optional[str] = None):
     """Начало процесса авторизации"""
     domain = get_domain_from_request(request)
+    
+    # Если есть ошибка, логируем её
+    if error:
+        logger.warning(f"Ошибка авторизации для домена {domain}: {error}")
     
     # Кодируем домен в state для возврата после авторизации
     state = urllib.parse.quote(domain)
@@ -98,27 +102,44 @@ async def login(request: Request):
 
 
 @app.get("/auth/callback")
-async def callback(request: Request, code: Optional[str] = None, state: Optional[str] = None):
+async def callback(request: Request, code: Optional[str] = None, state: Optional[str] = None, error: Optional[str] = None):
     """Обработка callback от Yandex OAuth"""
+    # Проверяем наличие ошибки от Yandex
+    if error:
+        logger.error(f"Ошибка от Yandex OAuth: {error}")
+        domain = urllib.parse.unquote(state) if state else get_domain_from_request(request)
+        error_url = f"https://{domain}/auth/login?error={urllib.parse.quote(error)}"
+        return RedirectResponse(url=error_url, status_code=302)
+    
     if not code:
-        return HTMLResponse("<h1>Ошибка авторизации: отсутствует код</h1>", status_code=400)
+        logger.error("Ошибка авторизации: отсутствует код")
+        domain = get_domain_from_request(request)
+        error_url = f"https://{domain}/auth/login?error=no_code"
+        return RedirectResponse(url=error_url, status_code=302)
     
     # Получаем домен из state
     domain = urllib.parse.unquote(state) if state else get_domain_from_request(request)
+    logger.info(f"Обработка callback для домена: {domain}")
     
     # Получаем токен
     token_data = await yandex_oauth.get_token(code)
     if not token_data:
-        return HTMLResponse("<h1>Ошибка авторизации: не удалось получить токен</h1>", status_code=400)
+        logger.error(f"Ошибка получения токена для домена {domain}")
+        error_url = f"https://{domain}/auth/login?error=token_error"
+        return RedirectResponse(url=error_url, status_code=302)
     
     access_token = token_data.get("access_token")
     if not access_token:
-        return HTMLResponse("<h1>Ошибка авторизации: токен не найден</h1>", status_code=400)
+        logger.error(f"Токен не найден в ответе для домена {domain}")
+        error_url = f"https://{domain}/auth/login?error=no_token"
+        return RedirectResponse(url=error_url, status_code=302)
     
     # Получаем информацию о пользователе
     user_info = await yandex_oauth.get_user_info(access_token)
     if not user_info:
-        return HTMLResponse("<h1>Ошибка авторизации: не удалось получить информацию о пользователе</h1>", status_code=400)
+        logger.error(f"Не удалось получить информацию о пользователе для домена {domain}")
+        error_url = f"https://{domain}/auth/login?error=user_info_error"
+        return RedirectResponse(url=error_url, status_code=302)
     
     yandex_id = user_info.get("yandex_id", "")
     login = user_info.get("login", "")
