@@ -54,19 +54,30 @@ async def check_auth(request: Request) -> Optional[dict]:
     session_data = get_session_from_cookie(request)
     
     if not session_data:
+        logger.debug(f"Сессия не найдена для домена {domain}")
         return None
     
     # Проверяем, что сессия для правильного домена
-    if session_data.get("domain") != domain:
-        logger.debug(f"Сессия для другого домена: {session_data.get('domain')} != {domain}")
+    session_domain = session_data.get("domain")
+    if session_domain != domain:
+        logger.debug(f"Сессия для другого домена: {session_domain} != {domain}")
         return None
     
     # Проверяем доступ пользователя к домену
-    yandex_id = session_data.get("yandex_id")
-    if not db.is_user_allowed(domain, yandex_id):
-        logger.debug(f"Пользователь {yandex_id} не имеет доступа к домену {domain}")
+    # yandex_id в сессии может быть как числовым ID, так и login
+    user_identifier = session_data.get("yandex_id", "")
+    if not user_identifier:
+        logger.debug(f"yandex_id не найден в сессии")
         return None
     
+    # Проверяем доступ (поддерживаем и ID и login)
+    is_allowed = db.is_user_allowed(domain, user_identifier)
+    if not is_allowed:
+        logger.debug(f"Пользователь {user_identifier} не имеет доступа к домену {domain}")
+        logger.debug(f"Доступные пользователи для {domain}: {db.get_domain_users(domain)}")
+        return None
+    
+    logger.debug(f"Пользователь {user_identifier} авторизован для домена {domain}")
     return session_data
 
 
