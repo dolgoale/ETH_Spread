@@ -82,12 +82,17 @@ class UserDatabase:
         domain_data = db.get("domains", {}).get(domain, {})
         return domain_data.get("users", [])
     
-    def is_user_allowed(self, domain: str, yandex_id: str) -> bool:
+    def is_user_allowed(self, domain: str, user_identifier: str) -> bool:
         """Проверить, разрешен ли доступ пользователя к домену"""
+        if not user_identifier:
+            return False
         users = self.get_domain_users(domain)
+        logger.debug(f"Проверка доступа для домена {domain}: user_identifier={user_identifier}, users={users}")
         # Проверяем точное совпадение (регистронезависимо)
-        yandex_id_lower = yandex_id.lower() if yandex_id else ""
-        return any(user.lower() == yandex_id_lower for user in users)
+        user_identifier_lower = user_identifier.lower()
+        result = any(user.lower() == user_identifier_lower for user in users)
+        logger.debug(f"Результат проверки доступа: {result}")
+        return result
     
     def add_user_to_domain(self, domain: str, yandex_id: str) -> bool:
         """Добавить пользователя к домену"""
