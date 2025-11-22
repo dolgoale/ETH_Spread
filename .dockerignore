@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-compose.*.yml
+
+# Конфигурация (динамически изменяемая, но может быть создана в контейнере)
+# config.json
+
+# Тесты
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Документация (опционально, можно включить если нужно)
+# docs/
+
+# Временные файлы
+*.tmp
+*.bak
+*.swp
+
