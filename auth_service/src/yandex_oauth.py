@@ -3,6 +3,7 @@
 """
 import httpx
 import logging
+import urllib.parse
 from typing import Optional, Dict
 from .config import settings
 
@@ -31,7 +32,8 @@ class YandexOAuth:
         if state:
             params["state"] = state
         
-        query_string = "&".join([f"{k}={v}" for k, v in params.items()])
+        # Правильное кодирование URL параметров
+        query_string = urllib.parse.urlencode(params)
         return f"{self.OAUTH_AUTHORIZE_URL}?{query_string}"
     
     async def get_token(self, code: str) -> Optional[Dict]:
