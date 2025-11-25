@@ -387,10 +387,10 @@ const AssetPage: React.FC = () => {
           Примечание: Комиссии вычитаются из чистой прибыли. В скобках указана прибыль в USDT.
         </Typography>
         <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-          <strong>"Чистая прибыль (FR)":</strong> На основе среднего Funding Rate за последние 30 дней до экспирации.
+          <strong>"Чистая прибыль (FR)":</strong> Суммарный FR за количество дней до экспирации фьючерса (на основе среднего FR за последние 30 дней) минус спред и комиссии.
         </Typography>
         <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-          <strong>"Чистая прибыль (FR за 1 год)":</strong> На основе среднего Funding Rate за последние 365 дней.
+          <strong>"Чистая прибыль (FR за 1 год)":</strong> Суммарный FR за количество дней до экспирации фьючерса (на основе среднего FR за последние 365 дней) минус спред и комиссии.
         </Typography>
         <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
           <strong>"ROC % годовых":</strong> Доходность на капитал в процентах годовых. Цвет зависит от знака: зеленый - положительная, красный - отрицательная.
