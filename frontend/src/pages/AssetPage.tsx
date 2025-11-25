@@ -291,20 +291,17 @@ const AssetPage: React.FC = () => {
               <TableCell align="right" title="FR за количество дней до экспирации на базе среднего FR за последний год">
                 FR (за 1 год)
               </TableCell>
-              <TableCell align="right" title="Чистая прибыль на базе исторического FR за 30 дней">
+              <TableCell align="right" title="Чистая прибыль на базе исторического FR за 30 дней (% и USDT)">
                 Чистая прибыль (FR)
               </TableCell>
-              <TableCell align="right" title="Чистая прибыль на базе среднего FR за последний год">
+              <TableCell align="right" title="Чистая прибыль на базе среднего FR за последний год (% и USDT)">
                 Чистая прибыль (FR за 1 год)
               </TableCell>
-              <TableCell align="right" title="Чистая прибыль в USDT (на базе FR за 30 дней)">
-                Прибыль (USDT)
-              </TableCell>
-              <TableCell align="right" title="Доходность на капитал в % годовых (на базе FR за 30 дней)">
-                ROC (% годовых)
+              <TableCell align="right" title="Доходность на капитал в % годовых (на базе FR до экспирации)">
+                ROC % годовых (FR до экспирации)
               </TableCell>
               <TableCell align="right" title="Доходность на капитал в % годовых (на базе FR за 1 год)">
-                ROC % (FR за 1 год)
+                ROC % годовых (FR за 1 год)
               </TableCell>
             </TableRow>
           </TableHead>
@@ -337,14 +334,21 @@ const AssetPage: React.FC = () => {
                   <TableCell align="right">{formatPercentAlready(future.funding_rate_365days_until_expiration)}</TableCell>
                   <TableCell align="right" sx={{ color: getColor(future.net_profit_current_fr) }}>
                     {formatPercentAlready(future.net_profit_current_fr)}
+                    {future.net_profit_usdt !== undefined && (
+                      <span style={{ fontSize: '0.85em', opacity: 0.8 }}>
+                        {' '}(${formatNumber(future.net_profit_usdt, 2)})
+                      </span>
+                    )}
                   </TableCell>
                   <TableCell align="right" sx={{ color: getColor(future.net_profit_365days_fr) }}>
                     {formatPercentAlready(future.net_profit_365days_fr)}
+                    {future.net_profit_usdt_365days !== undefined && (
+                      <span style={{ fontSize: '0.85em', opacity: 0.8 }}>
+                        {' '}(${formatNumber(future.net_profit_usdt_365days, 2)})
+                      </span>
+                    )}
                   </TableCell>
-                  <TableCell align="right" sx={{ color: getColor(future.net_profit_current_fr) }}>
-                    {future.net_profit_usdt !== undefined ? `$${formatNumber(future.net_profit_usdt, 2)}` : 'N/A'}
-                  </TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 'bold' }}>
+                  <TableCell align="right" sx={{ fontWeight: 'bold', color: getColor(future.return_on_capital) }}>
                     {future.return_on_capital !== undefined ? `${formatNumber(future.return_on_capital, 2)}%` : 'N/A'}
                   </TableCell>
                   <TableCell align="right" sx={{ fontWeight: 'bold', color: getColor(future.return_on_capital_365days) }}>
@@ -380,13 +384,16 @@ const AssetPage: React.FC = () => {
           <strong>Итого комиссий за полный цикл сделки:</strong> 4 сделки × 0.0290% = <strong>0.1160%</strong>
         </Typography>
         <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-          Примечание: Комиссии вычитаются из чистой прибыли в колонках "Чистая прибыль (FR)" и "Чистая прибыль (FR за 1 год)".
+          Примечание: Комиссии вычитаются из чистой прибыли. В скобках указана прибыль в USDT.
         </Typography>
         <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-          <strong>Расчет "Прибыль (USDT)" и "ROC (% годовых)":</strong> Используется "Чистая прибыль (FR)" на основе среднего Funding Rate за последние 30 дней.
+          <strong>"Чистая прибыль (FR)":</strong> На основе среднего Funding Rate за последние 30 дней до экспирации.
         </Typography>
         <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-          <strong>Расчет "ROC % (FR за 1 год)":</strong> Используется "Чистая прибыль (FR за 1 год)" на основе среднего Funding Rate за последние 365 дней.
+          <strong>"Чистая прибыль (FR за 1 год)":</strong> На основе среднего Funding Rate за последние 365 дней.
+        </Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+          <strong>"ROC % годовых":</strong> Доходность на капитал в процентах годовых. Цвет зависит от знака: зеленый - положительная, красный - отрицательная.
         </Typography>
       </Paper>
 
