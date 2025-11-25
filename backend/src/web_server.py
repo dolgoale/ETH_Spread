@@ -575,50 +575,47 @@ class WebServer:
                         fair_spread_percent = ((fair_futures_price - perpetual_mark_price) / perpetual_mark_price * 100) if perpetual_mark_price > 0 else None
                         future_info["fair_spread_percent"] = fair_spread_percent
                         
-                        # Получаем суммарный FR за количество дней, равное дням до экспирации
-                        # Используем полную историю за нужный период (метод поддерживает множественные запросы)
-                        days_for_fr = int(days_until_exp) if days_until_exp > 0 else 30
-                        # Ограничиваем максимальное количество дней (365 - максимум доступной истории)
-                        days_for_fr = min(days_for_fr, 365)
+                        # Получаем суммарный FR за количество дней до экспирации
+                        # Логика:
+                        # 1. Если days_until_exp <= 365: берем историю за точное количество дней и суммируем
+                        # 2. Если days_until_exp > 365: берем историю за 365 дней, вычисляем средний FR и масштабируем
                         
-                        # Получаем полную историю FR за период, равный дням до экспирации
+                        days_for_fr = int(days_until_exp) if days_until_exp > 0 else 30
+                        days_for_fr_limited = min(days_for_fr, 365)  # ByBit API ограничение
+                        
+                        # Получаем историю FR
                         history = await loop.run_in_executor(
                             executor,
                             bybit_client.get_funding_rate_history,
                             perpetual_symbol,
-                            days_for_fr
+                            days_for_fr_limited
                         )
                         
-                        if history:
-                            # Суммируем все FR из истории - это суммарный FR за период истории
+                        # Количество выплат до экспирации (используется в нескольких местах)
+                        payments_until_exp = days_until_exp * 3
+                        
+                        if history and len(history) > 0:
+                            # Суммируем все FR из истории
                             rates = [item["funding_rate"] for item in history]
-                            total_fr_for_days = sum(rates) if rates else 0
-                            
-                            # Количество выплат в истории (может быть меньше, если история неполная)
+                            total_fr_from_history = sum(rates) if rates else 0
                             actual_payments_in_history = len(history)
-                            expected_payments_in_history = days_for_fr * 3
                             
-                            # Если получили полную историю, используем сумму напрямую
-                            # Если период до экспирации отличается от периода истории, масштабируем
-                            if actual_payments_in_history >= expected_payments_in_history * 0.95:  # 95% порог для учета возможных пропусков
-                                # История почти полная - используем средний FR за выплату и масштабируем на период до экспирации
-                                avg_fr_per_payment = total_fr_for_days / actual_payments_in_history if actual_payments_in_history > 0 else 0
-                                payments_until_exp = days_until_exp * 3
-                                funding_rate_until_exp = avg_fr_per_payment * payments_until_exp * 100
+                            # Если период до экспирации <= 365 дней
+                            if days_until_exp <= 365:
+                                # Используем суммарный FR напрямую
+                                # (это и есть суммарный FR за количество дней до экспирации)
+                                funding_rate_until_exp = total_fr_from_history * 100
                             else:
-                                # История неполная - масштабируем имеющийся суммарный FR
-                                avg_fr_per_payment = total_fr_for_days / actual_payments_in_history if actual_payments_in_history > 0 else 0
-                                payments_until_exp = days_until_exp * 3
+                                # Период > 365 дней: масштабируем на основе среднего FR
+                                avg_fr_per_payment = total_fr_from_history / actual_payments_in_history
                                 funding_rate_until_exp = avg_fr_per_payment * payments_until_exp * 100
                         else:
-                            # Fallback: рассчитываем суммарный FR на основе текущего FR
+                            # Fallback: используем текущий FR
                             avg_fr_per_payment = current_funding_rate if current_funding_rate else 0
-                            payments_until_exp = days_until_exp * 3
                             funding_rate_until_exp = avg_fr_per_payment * payments_until_exp * 100
-                            total_fr_for_days = current_funding_rate * days_for_fr * 3
                         
                         future_info["funding_rate_until_expiration"] = funding_rate_until_exp
-                        future_info["average_fr_days_used"] = days_for_fr  # Сохраняем количество дней, за которое рассчитан FR
+                        future_info["average_fr_days_used"] = days_for_fr_limited  # Сохраняем количество дней истории, использованных для расчета
                         
                         # FR за 365 дней до экспирации (суммарный)
                         # Получаем средний FR за 365 дней из кэша
@@ -630,13 +627,15 @@ class WebServer:
                         
                         future_info["funding_rate_365days_until_expiration"] = fr_365days_until_exp
                         
-                        # Чистая прибыль (суммарный FR за кол-во дней до экспирации на основе 30 дней)
+                        # Чистая прибыль (на основе суммарного FR за количество дней до экспирации)
                         # Стратегия: Short Perp + Long Fut (Заработок на FR)
-                        # Profit = Funding Rate - Spread - Fees
+                        # Profit = Funding Rate до экспирации - Spread - Fees
+                        # Для фьючерсов ≤365 дней: используется точная сумма FR из истории
+                        # Для фьючерсов >365 дней: масштабируется средний FR за 365 дней
                         net_profit_current_fr = funding_rate_until_exp - spread_data.spread_percent - TOTAL_TRADING_FEES
                         future_info["net_profit_current_fr"] = net_profit_current_fr
                         
-                        # Чистая прибыль (FR за 365 дней)
+                        # Чистая прибыль (на основе среднего FR за 365 дней, масштабированного на период до экспирации)
                         net_profit_365days_fr = fr_365days_until_exp - spread_data.spread_percent - TOTAL_TRADING_FEES
                         future_info["net_profit_365days_fr"] = net_profit_365days_fr
                     else:
@@ -1177,11 +1176,16 @@ class WebServer:
                     # Количество периодов FR (каждые 8 часов)
                     periods_until_exp = days_until_exp * 3
                     
-                    # FR до экспирации (текущий средний за 30 дней)
+                    # ПРИМЕЧАНИЕ: В этой функции мы используем упрощенный расчет (масштабирование среднего FR),
+                    # так как она вызывается при каждом обновлении цен через WebSocket.
+                    # Точный расчет (суммирование истории FR) происходит в _get_instruments_data.
+                    # Здесь мы только обновляем цены и пересчитываем спреды/прибыли на основе кэшированных средних FR.
+                    
+                    # FR до экспирации (на основе среднего FR за 30 дней)
                     funding_rate_until_exp = average_funding_rate * periods_until_exp * 100
                     future['funding_rate_until_expiration'] = funding_rate_until_exp
                     
-                    # FR до экспирации (средний за 365 дней)
+                    # FR до экспирации (на основе среднего FR за 365 дней)
                     fr_365days_until_exp = average_365days * periods_until_exp * 100
                     future['funding_rate_365days_until_expiration'] = fr_365days_until_exp
                     
