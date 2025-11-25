@@ -42,3 +42,6 @@ echo ""
 echo "🛑 Остановка:"
 echo "   docker-compose -f docker-compose.new-dev.yml down"
 
+
+
+

@@ -14,6 +14,11 @@ RUN npm install
 # Копирование исходного кода
 COPY . .
 
+# Установка переменных окружения для production сборки
+ENV NODE_ENV=production
+ENV REACT_APP_API_URL=""
+ENV REACT_APP_WS_URL=""
+
 # Сборка приложения
 RUN npm run build
 

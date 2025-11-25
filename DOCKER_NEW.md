@@ -232,3 +232,6 @@ docker-compose -f docker-compose.new.yml up -d
 Старые файлы (`main.py`, `src/` в корне) больше не используются.
 Новые файлы находятся в `backend/` и `frontend/`.
 
+
+
+

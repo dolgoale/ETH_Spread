@@ -1,9 +1,9 @@
 import axios from 'axios';
 import { MonitoringData, Config, InstrumentData, InstrumentFullData } from '../types';
 
-// В режиме разработки используем прокси, в продакшене - переменную окружения
+// В режиме разработки используем прокси, в продакшене - относительные пути
 const API_BASE_URL = process.env.NODE_ENV === 'production' 
-  ? (process.env.REACT_APP_API_URL || 'http://localhost:8000')
+  ? (process.env.REACT_APP_API_URL || '')
   : '';
 
 export const api = {
@@ -48,7 +48,7 @@ export class WebSocketService {
     // В режиме разработки используем localhost:8000, в продакшене - текущий хост
     const wsBaseUrl = process.env.NODE_ENV === 'production'
       ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
-      : 'ws://localhost:8000';
+      : (process.env.REACT_APP_WS_URL || 'ws://localhost:8000');
     const wsUrl = wsBaseUrl + endpoint;
     
     this.ws = new WebSocket(wsUrl);
