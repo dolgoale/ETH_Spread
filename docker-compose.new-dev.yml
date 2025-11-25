@@ -1,0 +1,100 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: eth-spread-backend-dev
+    restart: unless-stopped
+    
+    # Переменные окружения из .env файла
+    env_file:
+      - .env
+    
+    # Дополнительные переменные окружения
+    environment:
+      - PYTHONUNBUFFERED=1
+      - WEB_SERVER_HOST=0.0.0.0
+      - WEB_SERVER_PORT=8000
+    
+    # Монтирование томов для разработки (read-write)
+    volumes:
+      # Исходный код для hot-reload
+      - ./backend/src:/app/src
+      - ./backend/config.py:/app/config.py
+      - ./backend/main.py:/app/main.py
+      - ./backend/requirements.txt:/app/requirements.txt
+      # Логи
+      - ./logs:/app/logs
+      - ./backend/eth_spread_monitor.log:/app/eth_spread_monitor.log
+      # Конфигурация
+      - ./backend/config.json:/app/config.json
+    
+    # Открытие порта
+    ports:
+      - "8000:8000"
+    
+    # Логирование
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Здоровье контейнера
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/api/config || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # Сетевая конфигурация
+    networks:
+      - eth-spread-network
+
+  frontend:
+    image: node:20-alpine
+    container_name: eth-spread-frontend-dev
+    restart: unless-stopped
+    working_dir: /app
+    
+    # Команда для dev сервера
+    command: sh -c "npm install && npm start"
+    
+    # Переменные окружения
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
+    
+    # Монтирование исходного кода
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    
+    # Проброс портов
+    ports:
+      - "3000:3000"
+    
+    # Зависимость от backend
+    depends_on:
+      backend:
+        condition: service_healthy
+    
+    # Логирование
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    
+    # Сетевая конфигурация
+    networks:
+      - eth-spread-network
+
+networks:
+  eth-spread-network:
+    driver: bridge
+
